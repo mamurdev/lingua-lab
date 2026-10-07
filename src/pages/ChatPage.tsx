@@ -2,33 +2,28 @@ import { useState, useEffect } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
 
-type Message = {
-  id: string;
-  role: 'user' | 'assistant';
-  content: string;
-  sequence: number;
-};
+type Message = { id: string; role: 'user' | 'assistant'; content: string; sequence: number; };
+type Conversation = { language: string; level: string; };
 
 export default function ChatPage() {
-  const { id } = useParams(); // Grabs the conversation_id from the URL
+  const { id } = useParams();
   const [messages, setMessages] = useState<Message[]>([]);
+  const [convDetails, setConvDetails] = useState<Conversation | null>(null);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    const fetchMessages = async () => {
-      const { data, error } = await supabase
-        .from('messages')
-        .select('*')
-        .eq('conversation_id', id)
-        .order('sequence', { ascending: true });
+    const fetchInitialData = async () => {
+      // 1. Fetch conversation details for the AI prompt context
+      const { data: convData } = await supabase.from('conversations').select('*').eq('id', id).single();
+      if (convData) setConvDetails(convData);
 
-      if (!error && data) {
-        setMessages(data);
-      }
+      // 2. Fetch the chat history
+      const { data: msgData } = await supabase.from('messages').select('*').eq('conversation_id', id).order('sequence', { ascending: true });
+      if (msgData) setMessages(msgData);
     };
 
-    if (id) fetchMessages();
+    if (id) fetchInitialData();
   }, [id]);
 
   const sendMessage = async (e: React.FormEvent) => {
@@ -39,21 +34,38 @@ export default function ChatPage() {
     setInput('');
     setLoading(true);
 
-    const sequence = messages.length + 1;
-    const tempMsg: Message = { id: Date.now().toString(), role: 'user', content: newMessage, sequence };
-    
-    // Show instantly on screen
-    setMessages((prev) => [...prev, tempMsg]);
+    // Save user message to UI & Database
+    const userSeq = messages.length + 1;
+    const tempUserMsg: Message = { id: Date.now().toString(), role: 'user', content: newMessage, sequence: userSeq };
+    setMessages((prev) => [...prev, tempUserMsg]);
+    await supabase.from('messages').insert([{ conversation_id: id, role: 'user', content: newMessage, sequence: userSeq }]);
 
-    // Send to Supabase
-    const { error } = await supabase.from('messages').insert([{
-      conversation_id: id,
-      role: 'user',
-      content: newMessage,
-      sequence
-    }]);
+    try {
+      // Call the Express backend
+      const response = await fetch('http://localhost:3000/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          message: newMessage,
+          language: convDetails?.language || 'English',
+          level: convDetails?.level || 'Beginner',
+          conversationHistory: messages
+        }),
+      });
 
-    if (error) console.error("Error sending message:", error);
+      const data = await response.json();
+
+      // Save AI reply to UI & Database
+      if (data.reply) {
+        const aiSeq = userSeq + 1;
+        const tempAiMsg: Message = { id: (Date.now() + 1).toString(), role: 'assistant', content: data.reply, sequence: aiSeq };
+        setMessages((prev) => [...prev, tempAiMsg]);
+        await supabase.from('messages').insert([{ conversation_id: id, role: 'assistant', content: data.reply, sequence: aiSeq }]);
+      }
+    } catch (error) {
+      console.error("Failed to fetch AI response:", error);
+    }
+
     setLoading(false);
   };
 
@@ -82,7 +94,7 @@ export default function ChatPage() {
             </div>
           ))
         )}
-        {loading && <div className="flex justify-end text-gray-400 text-sm italic pr-2">Sending...</div>}
+        {loading && <div className="flex justify-start text-gray-400 text-sm italic pl-2">AI is typing...</div>}
       </main>
 
       <footer className="p-4 bg-gray-800 border-t border-gray-700">
@@ -91,7 +103,7 @@ export default function ChatPage() {
             type="text"
             value={input}
             onChange={(e) => setInput(e.target.value)}
-            placeholder="Type your message in your target language..."
+            placeholder="Type your message..."
             disabled={loading}
             className="flex-1 bg-gray-900 p-3.5 rounded border border-gray-600 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 focus:outline-none disabled:opacity-50 transition-all"
           />

@@ -1,30 +1,43 @@
-import express from 'express';
-import cors from 'cors';
-import dotenv from 'dotenv';
+import "cross-fetch/dist/node-polyfill.js";
+import express from "express";
+import cors from "cors";
+import dotenv from "dotenv";
+import { GoogleGenerativeAI } from "@google/generative-ai";
 
 dotenv.config();
 
 const app = express();
-
-// Allow your React app to communicate with this server
-app.use(cors({ origin: 'http://localhost:5173' }));
+app.use(cors({ origin: "http://localhost:5173" }));
 app.use(express.json());
 
-// The endpoint your React app will hit
-app.post('/api/chat', async (req, res) => {
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+
+app.post("/api/chat", async (req, res) => {
   try {
-    const { message, language, level, conversationHistory } = req.body;
-    
-    console.log(`Received message: "${message}" for ${language} (${level})`);
+    const {
+      message,
+      language = "English",
+      level = "Beginner",
+      conversationHistory = [],
+    } = req.body;
 
-    // We will plug Gemini or Claude in right here in the next step
-    const mockAiReply = `This is a test reply from your secure Express server! I see you said: ${message}`;
+    const model = genAI.getGenerativeModel({
+      model: "gemini-3.1-flash-lite",
+      systemInstruction: `You are a helpful language tutor. The user is practicing ${language} at a ${level} level. Respond naturally in ${language}. Correct them gently if needed.`,
+    });
 
-    res.json({ reply: mockAiReply });
-    
+    const history = conversationHistory.map((msg) => ({
+      role: msg.role === "assistant" ? "model" : "user",
+      parts: [{ text: msg.content }],
+    }));
+
+    const chat = model.startChat({ history });
+    const result = await chat.sendMessage(message);
+
+    res.json({ reply: result.response.text() });
   } catch (error) {
     console.error(error);
-    res.status(500).json({ error: 'Failed to process chat' });
+    res.status(500).json({ error: "Failed to process chat with Gemini" });
   }
 });
 
