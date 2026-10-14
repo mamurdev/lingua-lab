@@ -11,7 +11,6 @@ CREATE TABLE public.conversations (
     language TEXT NOT NULL,
     level TEXT NOT NULL,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL,
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
 );
 
 -- MESSAGES
