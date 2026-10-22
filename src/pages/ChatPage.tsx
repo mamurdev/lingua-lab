@@ -140,6 +140,19 @@ export default function ChatPage() {
   const [selectedAnswers, setSelectedAnswers] = useState<Record<number, number>>({});
   const [isGraded, setIsGraded] = useState(false);
 
+  // Milestone 5.3: Session & Architecture Information modal state
+  const [showSessionInfo, setShowSessionInfo] = useState(false);
+
+  // Milestone 5.3: In-flight request guards against conversation switching
+  const currentConvIdRef = useRef<string | undefined>(id);
+  const chatAbortControllerRef = useRef<AbortController | null>(null);
+  const audioAbortControllerRef = useRef<AbortController | null>(null);
+  const quizAbortControllerRef = useRef<AbortController | null>(null);
+
+  useEffect(() => {
+    currentConvIdRef.current = id;
+  }, [id]);
+
   useEffect(() => {
     audioUrlsRef.current = audioUrls;
   }, [audioUrls]);
@@ -336,47 +349,74 @@ export default function ChatPage() {
   };
 
   useEffect(() => {
+    // Milestone 5.3: Abort any in-flight requests from the previous conversation
+    chatAbortControllerRef.current?.abort();
+    audioAbortControllerRef.current?.abort();
+    quizAbortControllerRef.current?.abort();
+
+    let active = true;
+    const targetId = id;
+
     const fetchInitialData = async () => {
+      if (!targetId) return;
+
       // 1. Fetch conversation details for the AI prompt context
-      const { data: convData } = await supabase.from('conversations').select('*').eq('id', id).single();
-      if (convData) setConvDetails(convData);
+      const { data: convData } = await supabase.from('conversations').select('*').eq('id', targetId).single();
+      if (!active || currentConvIdRef.current !== targetId) return;
+      setConvDetails(convData);
 
       // 2. Fetch the chat history
       const { data: msgData } = await supabase
         .from('messages')
         .select('*')
-        .eq('conversation_id', id)
+        .eq('conversation_id', targetId)
         .order('sequence', { ascending: true });
-      if (msgData) setMessages(msgData);
+      if (!active || currentConvIdRef.current !== targetId) return;
+      setMessages(msgData || []);
 
       // 3. Fetch existing saved quizzes (Milestone 4)
       const { data: exData } = await supabase
         .from('exercises')
         .select('*')
-        .eq('conversation_id', id)
+        .eq('conversation_id', targetId)
         .order('created_at', { ascending: false });
-      if (exData) setExercises(exData);
+      if (!active || currentConvIdRef.current !== targetId) return;
+      setExercises(exData || []);
+      setSelectedAnswers({});
+      setIsGraded(false);
+      setChatError(null);
+      setQuizError(null);
+      setAudioUrls({});
+      setAudioLoadingId(null);
+      setPlayingAudioId(null);
+      setLoading(false);
+      setStreamingMessageId(null);
 
       // 4. Fetch saved grammar feedback
       try {
-        const stored = localStorage.getItem(`lingua_grammar_${id}`);
-        if (stored) {
-          setGrammarFeedbackMap(JSON.parse(stored));
-        } else {
-          setGrammarFeedbackMap({});
+        const stored = localStorage.getItem(`lingua_grammar_${targetId}`);
+        if (active && currentConvIdRef.current === targetId) {
+          setGrammarFeedbackMap(stored ? JSON.parse(stored) : {});
         }
       } catch {
         /* ignore storage read error */
       }
 
       // 5. Fetch saved immersion scenario
-      if (id) {
-        const storedScenario = getStoredScenario(id);
+      if (active && currentConvIdRef.current === targetId) {
+        const storedScenario = getStoredScenario(targetId);
         setScenario(storedScenario);
       }
     };
 
-    if (id) fetchInitialData();
+    if (targetId) fetchInitialData();
+
+    return () => {
+      active = false;
+      chatAbortControllerRef.current?.abort();
+      audioAbortControllerRef.current?.abort();
+      quizAbortControllerRef.current?.abort();
+    };
   }, [id]);
 
   const sendMessage = async (e: React.FormEvent) => {
@@ -414,12 +454,19 @@ export default function ChatPage() {
     setMessages((prev) => [...prev, tempUserMsg, tempAssistantMsg]);
     setStreamingMessageId(tempAssistantId);
 
+    const activeConvId = id;
+    const controller = new AbortController();
+    chatAbortControllerRef.current = controller;
+
     try {
       const { data: { session } } = await supabase.auth.getSession();
       const token = session?.access_token;
 
+      if (controller.signal.aborted || currentConvIdRef.current !== activeConvId) return;
+
       const response = await fetch('/api/chat', {
         method: 'POST',
+        signal: controller.signal,
         headers: {
           'Content-Type': 'application/json',
           ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
@@ -554,7 +601,10 @@ export default function ChatPage() {
         });
       }
       setLastFailedMessage(null);
-    } catch (error) {
+    } catch (error: unknown) {
+      if (controller.signal.aborted || currentConvIdRef.current !== activeConvId) {
+        return; // Request was aborted or user navigated away; prevent landing state on wrong conversation
+      }
       console.error('Failed to send message:', error);
       // Remove optimistic messages on failure, restore draft
       setMessages((prev) => prev.filter((m) => m.id !== tempUserId && m.id !== tempAssistantId));
@@ -562,8 +612,10 @@ export default function ChatPage() {
       setLastFailedMessage(newMessage);
       setChatError(error instanceof Error ? error.message : 'Failed to send message');
     } finally {
-      setStreamingMessageId(null);
-      setLoading(false);
+      if (currentConvIdRef.current === activeConvId) {
+        setStreamingMessageId(null);
+        setLoading(false);
+      }
     }
   };
 
@@ -618,6 +670,10 @@ export default function ChatPage() {
       return;
     }
 
+    const activeConvId = id;
+    const controller = new AbortController();
+    audioAbortControllerRef.current = controller;
+
     setAudioLoadingId(msg.id);
     setAudioError((prev) => ({ ...prev, [msg.id]: '' }));
 
@@ -625,8 +681,11 @@ export default function ChatPage() {
       const { data: { session } } = await supabase.auth.getSession();
       const token = session?.access_token;
 
+      if (controller.signal.aborted || currentConvIdRef.current !== activeConvId) return;
+
       const response = await fetch('/api/speech', {
         method: 'POST',
+        signal: controller.signal,
         headers: {
           'Content-Type': 'application/json',
           ...(token ? { 'Authorization': `Bearer ${token}` } : {})
@@ -653,6 +712,8 @@ export default function ChatPage() {
         throw new Error("Received empty audio response");
       }
 
+      if (controller.signal.aborted || currentConvIdRef.current !== activeConvId) return;
+
       const audioBlob = new Blob([blob], { type: 'audio/mpeg' });
       const audioUrl = URL.createObjectURL(audioBlob);
 
@@ -661,19 +722,26 @@ export default function ChatPage() {
       });
 
       setAudioUrls((prev) => ({ ...prev, [msg.id]: audioUrl }));
-      setAudioLoadingId(null);
       setPlayingAudioId(msg.id);
-    } catch (error) {
+    } catch (error: unknown) {
+      if (controller.signal.aborted || currentConvIdRef.current !== activeConvId) return;
       console.error("Audio playback error:", error);
       const msgText = error instanceof Error ? error.message : "Failed to load audio";
       setAudioError((prev) => ({ ...prev, [msg.id]: msgText }));
-      setAudioLoadingId(null);
+    } finally {
+      if (currentConvIdRef.current === activeConvId) {
+        setAudioLoadingId(null);
+      }
     }
   };
 
   // Milestone 4: Quiz generation handler
   const handleGenerateQuiz = async () => {
     if (!id) return;
+    const activeConvId = id;
+    const controller = new AbortController();
+    quizAbortControllerRef.current = controller;
+
     setGeneratingQuiz(true);
     setQuizError(null);
 
@@ -681,8 +749,11 @@ export default function ChatPage() {
       const { data: { session } } = await supabase.auth.getSession();
       const token = session?.access_token;
 
+      if (controller.signal.aborted || currentConvIdRef.current !== activeConvId) return;
+
       const response = await fetch('/api/exercises', {
         method: 'POST',
+        signal: controller.signal,
         headers: {
           'Content-Type': 'application/json',
           ...(token ? { 'Authorization': `Bearer ${token}` } : {})
@@ -696,17 +767,22 @@ export default function ChatPage() {
         throw new Error(data.error || `Error ${response.status}: Failed to generate quiz`);
       }
 
+      if (controller.signal.aborted || currentConvIdRef.current !== activeConvId) return;
+
       if (data.exercise) {
         setExercises((prev) => [data.exercise, ...prev]);
         setSelectedAnswers({});
         setIsGraded(false);
         setActiveTab('quiz');
       }
-    } catch (err) {
+    } catch (err: unknown) {
+      if (controller.signal.aborted || currentConvIdRef.current !== activeConvId) return;
       console.error("Quiz generation error:", err);
       setQuizError(err instanceof Error ? err.message : "Failed to generate review quiz");
     } finally {
-      setGeneratingQuiz(false);
+      if (currentConvIdRef.current === activeConvId) {
+        setGeneratingQuiz(false);
+      }
     }
   };
 
@@ -779,9 +855,21 @@ export default function ChatPage() {
                   {convDetails?.level || 'Beginner'}
                 </span>
               </div>
-              <p className="text-[11px] text-slate-400 dark:text-slate-500 font-mono">
-                {messages.length} {messages.length === 1 ? 'message' : 'messages'}
-              </p>
+              <div className="flex items-center gap-2 mt-0.5">
+                <p className="text-[11px] text-slate-400 dark:text-slate-500 font-mono">
+                  {messages.length} {messages.length === 1 ? 'message' : 'messages'}
+                </p>
+                <button
+                  type="button"
+                  onClick={() => setShowSessionInfo(true)}
+                  title="View Session Memory & Quota Architecture (Milestone 5.3)"
+                  className="px-1.5 py-0.5 rounded bg-indigo-50 dark:bg-indigo-500/10 hover:bg-indigo-100 dark:hover:bg-indigo-500/20 text-indigo-700 dark:text-indigo-300 border border-indigo-200/80 dark:border-indigo-500/25 text-[10px] font-medium transition-colors flex items-center gap-1 focus-visible:ring-2 focus-visible:ring-indigo-500"
+                  aria-label="View session memory and architecture details"
+                >
+                  <span>ℹ️</span>
+                  <span>Session Info</span>
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -1170,6 +1258,9 @@ export default function ChatPage() {
                   )}
                 </button>
               </form>
+              <p className="text-[10px] text-center text-slate-400 dark:text-slate-500 font-medium mt-2">
+                Tutor retains latest 20 messages · Audio temporarily cached in session · Shared AI quota (00:00 UTC reset)
+              </p>
             </div>
           </footer>
         </>
@@ -1180,7 +1271,7 @@ export default function ChatPage() {
             <div>
               <h2 className="text-base font-bold tracking-tight text-slate-900 dark:text-white">Review Quiz</h2>
               <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                Practice vocabulary and grammar derived from your recent dialogue turns.
+                Practice vocabulary and grammar derived from your recent dialogue turns. Generated questions persist in your conversation; chosen answers and scores are evaluated locally in this browser session.
               </p>
             </div>
             {messages.length < 4 && (
@@ -1380,6 +1471,82 @@ export default function ChatPage() {
           }}
           onPlayAudio={playWordAudio}
         />
+      )}
+
+      {/* Milestone 5.3: Session Architecture & Policy Modal */}
+      {showSessionInfo && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="session-info-title"
+          className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in duration-150"
+          onClick={() => setShowSessionInfo(false)}
+        >
+          <div
+            className="bg-white dark:bg-[#0d121f] rounded-2xl border border-slate-200 dark:border-white/[0.08] p-6 max-w-md w-full shadow-2xl space-y-4 dark:shadow-[inset_0_1px_0_0_rgba(255,255,255,0.05)]"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between pb-3 border-b border-slate-200/80 dark:border-white/[0.08]">
+              <h3 id="session-info-title" className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                <span>ℹ️</span> Session Memory & Architecture
+              </h3>
+              <button
+                type="button"
+                onClick={() => setShowSessionInfo(false)}
+                className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 text-sm p-1 rounded-lg hover:bg-slate-100 dark:hover:bg-white/[0.06] transition-colors focus-visible:ring-2 focus-visible:ring-indigo-500"
+                aria-label="Close session details"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="space-y-3 text-xs text-slate-600 dark:text-slate-300">
+              <div className="p-3 bg-slate-50 dark:bg-white/[0.03] rounded-xl border border-slate-200/80 dark:border-white/[0.06] space-y-1">
+                <p className="font-semibold text-slate-900 dark:text-white flex items-center gap-1.5">
+                  <span>🧠</span> 20-Message Context Window
+                </p>
+                <p className="text-[11px] leading-relaxed text-slate-500 dark:text-slate-400">
+                  The AI tutor retains the latest 20 messages of your dialogue transcript to ensure prompt relevance, concise corrections, and focused conversational coherence.
+                </p>
+              </div>
+
+              <div className="p-3 bg-slate-50 dark:bg-white/[0.03] rounded-xl border border-slate-200/80 dark:border-white/[0.06] space-y-1">
+                <p className="font-semibold text-slate-900 dark:text-white flex items-center gap-1.5">
+                  <span>🔊</span> Temporary Audio Caching
+                </p>
+                <p className="text-[11px] leading-relaxed text-slate-500 dark:text-slate-400">
+                  Voice pronunciation is generated on-demand and cached temporarily in memory for this browser session. Refreshing or reopening will generate fresh audio on click.
+                </p>
+              </div>
+
+              <div className="p-3 bg-slate-50 dark:bg-white/[0.03] rounded-xl border border-slate-200/80 dark:border-white/[0.06] space-y-1">
+                <p className="font-semibold text-slate-900 dark:text-white flex items-center gap-1.5">
+                  <span>📝</span> Local Quiz Grading
+                </p>
+                <p className="text-[11px] leading-relaxed text-slate-500 dark:text-slate-400">
+                  Review quiz questions are saved permanently to your session history. Chosen options and grading scores remain local to this browser session and reset on reload.
+                </p>
+              </div>
+
+              <div className="p-3 bg-slate-50 dark:bg-white/[0.03] rounded-xl border border-slate-200/80 dark:border-white/[0.06] space-y-1">
+                <p className="font-semibold text-slate-900 dark:text-white flex items-center gap-1.5">
+                  <span>🛡️</span> Quotas & Turn Limits
+                </p>
+                <p className="text-[11px] leading-relaxed text-slate-500 dark:text-slate-400">
+                  Daily allowance: 60 shared AI turns/day and 30 voice turns/day, resetting at 00:00 UTC with a 6 requests/minute rate limit. Sessions cap at 100 complete turns.
+                </p>
+              </div>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setShowSessionInfo(false)}
+              className="w-full py-2 bg-slate-900 dark:bg-white/[0.08] hover:bg-slate-800 dark:hover:bg-white/[0.12] text-white text-xs font-semibold rounded-xl transition-all focus-visible:ring-2 focus-visible:ring-indigo-500"
+            >
+              Got it
+            </button>
+          </div>
+        </div>
       )}
     </div>
   );

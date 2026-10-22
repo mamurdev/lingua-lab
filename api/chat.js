@@ -74,8 +74,136 @@ async function enforceQuota(userId, kind, dayLimit = 60, minuteLimit = 6) {
   return enforceInMemoryQuota(userId, kind, dayLimit, minuteLimit);
 }
 
-// Robust helper to save chat turns: tries atomic RPC first, falls back to direct table inserts
-async function saveChatTurn(conversationId, userContent, assistantContent) {
+// ==========================================
+// Milestone 5.2: Generation Leases & Session Turn Caps
+// ==========================================
+
+// In-memory lease store: conversationId -> { token, expiresAt, userId }
+const inMemoryLeaseStore = new Map();
+
+function acquireInMemoryLease(conversationId, userId, durationSeconds = 90) {
+  const now = Date.now();
+  const existing = inMemoryLeaseStore.get(conversationId);
+  if (existing && existing.expiresAt > now) {
+    return {
+      acquired: false,
+      reason: "A response is already being generated for this conversation. Please wait.",
+    };
+  }
+
+  const token = typeof crypto !== "undefined" && crypto.randomUUID
+    ? crypto.randomUUID()
+    : `lease_${Date.now()}_${Math.random().toString(36).substring(2, 10)}`;
+  const expiresAt = now + durationSeconds * 1000;
+
+  inMemoryLeaseStore.set(conversationId, { token, expiresAt, userId });
+  return { acquired: true, token };
+}
+
+function releaseInMemoryLease(conversationId, token) {
+  const existing = inMemoryLeaseStore.get(conversationId);
+  if (existing && existing.token === token) {
+    inMemoryLeaseStore.delete(conversationId);
+    return true;
+  }
+  return false;
+}
+
+function validateInMemoryLease(conversationId, token) {
+  const now = Date.now();
+  const existing = inMemoryLeaseStore.get(conversationId);
+  if (!existing || existing.token !== token || existing.expiresAt <= now) {
+    return false;
+  }
+  return true;
+}
+
+async function acquireLease(conversationId, userId, durationSeconds = 90) {
+  try {
+    const { data, error } = await supabaseAdmin.rpc("acquire_conversation_lease", {
+      p_conversation_id: conversationId,
+      p_user_id: userId,
+      p_lease_duration_seconds: durationSeconds,
+    });
+    if (!error && data && data.length > 0) {
+      const res = data[0];
+      if (res.acquired) {
+        inMemoryLeaseStore.set(conversationId, {
+          token: res.lease_token,
+          expiresAt: Date.now() + durationSeconds * 1000,
+          userId,
+        });
+        return { acquired: true, token: res.lease_token };
+      }
+      return {
+        acquired: false,
+        code: res.error_code,
+        reason: res.error_message || "A response is already being generated for this conversation. Please wait.",
+      };
+    }
+  } catch {
+    // Fallback to in-memory store
+  }
+  return acquireInMemoryLease(conversationId, userId, durationSeconds);
+}
+
+async function releaseLease(conversationId, token) {
+  if (!conversationId || !token) return;
+  releaseInMemoryLease(conversationId, token);
+  try {
+    await supabaseAdmin.rpc("release_conversation_lease", {
+      p_conversation_id: conversationId,
+      p_lease_token: token,
+    });
+  } catch {
+    // Non-fatal fallback
+  }
+}
+
+// Robust helper to save chat turns: enforces unexpired lease token, checks turn cap, tries atomic RPC first, falls back to direct table inserts
+async function saveChatTurn(conversationId, leaseToken, userContent, assistantContent) {
+  // Validate lease token in-memory if lease exists
+  if (leaseToken && inMemoryLeaseStore.has(conversationId) && !validateInMemoryLease(conversationId, leaseToken)) {
+    throw new Error("Stale or expired generation lease token");
+  }
+
+  // 1. Try atomic RPC save_chat_turn_with_lease
+  try {
+    const { data: savedTurn, error: saveError } = await supabaseAdmin.rpc("save_chat_turn_with_lease", {
+      p_conversation_id: conversationId,
+      p_lease_token: leaseToken,
+      p_user_content: userContent,
+      p_assistant_content: assistantContent,
+    });
+
+    if (!saveError && savedTurn && savedTurn.length > 0) {
+      return {
+        userMsgId: savedTurn[0].user_msg_id,
+        assistantMsgId: savedTurn[0].assistant_msg_id,
+      };
+    }
+    if (saveError) {
+      // If Postgres explicitly raised lease or cap exception, propagate that
+      if (
+        saveError.message &&
+        !saveError.message.includes("schema cache") &&
+        (saveError.message.includes("Invalid, stale, or expired") || saveError.message.includes("Session limit reached"))
+      ) {
+        throw new Error(saveError.message);
+      }
+      console.warn(`[Chat] save_chat_turn_with_lease RPC notice (${saveError.message}), using fallback...`);
+    }
+  } catch (rpcErr) {
+    if (
+      rpcErr.message &&
+      !rpcErr.message.includes("schema cache") &&
+      (rpcErr.message.includes("Invalid, stale, or expired") || rpcErr.message.includes("Session limit reached"))
+    ) {
+      throw rpcErr;
+    }
+  }
+
+  // 2. Try legacy save_chat_turn RPC
   try {
     const { data: savedTurn, error: saveError } = await supabaseAdmin.rpc("save_chat_turn", {
       p_conversation_id: conversationId,
@@ -89,14 +217,15 @@ async function saveChatTurn(conversationId, userContent, assistantContent) {
         assistantMsgId: savedTurn[0].assistant_msg_id,
       };
     }
-    if (saveError) {
-      console.warn(`[Chat] save_chat_turn RPC notice (${saveError.message}), using direct insert fallback.`);
-    }
-  } catch (rpcErr) {
-    console.warn("[Chat] save_chat_turn RPC exception, using direct insert fallback:", rpcErr);
+  } catch {
+    // Fallback to direct table insert below
   }
 
-  // Direct table insert fallback
+  // 2. Direct table insert fallback (with unexpired lease check)
+  if (leaseToken && inMemoryLeaseStore.has(conversationId) && !validateInMemoryLease(conversationId, leaseToken)) {
+    throw new Error("Stale or expired generation lease token");
+  }
+
   const { data: lastMsg } = await supabaseAdmin
     .from("messages")
     .select("sequence")
@@ -259,6 +388,10 @@ export default async function handler(req, res) {
     return res.status(405).json({ error: "Method not allowed" });
   }
 
+  let leaseAcquired = false;
+  let activeLeaseToken = null;
+  let activeConversationId = null;
+
   try {
     const authHeader = req.headers.authorization;
     const token = authHeader ? authHeader.replace("Bearer ", "") : null;
@@ -273,11 +406,6 @@ export default async function handler(req, res) {
       return res.status(401).json({ error: "Authentication required" });
     }
 
-    const quota = await enforceQuota(userId, "ai", 60, 6);
-    if (!quota.allowed) {
-      return res.status(429).json({ error: quota.reason });
-    }
-
     const {
       message,
       language = "English",
@@ -287,11 +415,18 @@ export default async function handler(req, res) {
       scenario,
     } = req.body;
 
-    if (!message || !conversationId) {
-      return res.status(400).json({ error: "Missing message or conversationId" });
+    // 1. Validate inputs (PRD lines 251, 324)
+    if (!message || typeof message !== "string" || message.trim().length === 0) {
+      return res.status(400).json({ error: "Message cannot be empty" });
+    }
+    if (message.length > 2000) {
+      return res.status(400).json({ error: "Message exceeds maximum length of 2,000 characters" });
+    }
+    if (!conversationId || typeof conversationId !== "string") {
+      return res.status(400).json({ error: "Missing or invalid conversationId" });
     }
 
-    // Verify conversation ownership
+    // 2. Verify conversation ownership
     const { data: conv, error: convError } = await supabaseAdmin
       .from("conversations")
       .select("id, user_id")
@@ -303,19 +438,63 @@ export default async function handler(req, res) {
       return res.status(404).json({ error: "Conversation not found or access denied" });
     }
 
-    const models = ["gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.8-flash"];
-    const history = conversationHistory.map((msg) => ({
-      role: msg.role === "assistant" ? "model" : "user",
-      parts: [{ text: msg.content }],
-    }));
+    // 3. Cap sessions at 100 complete turns (PRD lines 277, 332, TODO 5.2)
+    try {
+      const { count, error: countErr } = await supabaseAdmin
+        .from("messages")
+        .select("id", { count: "exact", head: true })
+        .eq("conversation_id", conversationId)
+        .eq("role", "assistant");
 
-    // Feature 3: Dynamic persona & immersion instructions
-    let systemInstruction = `You are a helpful language tutor. The user is practicing ${language} at a ${level} level. Respond naturally in ${language}. Correct them gently if needed. Limit response to under 120 words.`;
-    if (scenario && scenario.title) {
-      const objectivesList = Array.isArray(scenario.objectives)
-        ? scenario.objectives.map((o) => `- ${o.text}`).join("\n")
-        : "";
-      systemInstruction = `You are roleplaying as ${scenario.aiRole || "a conversational partner"} in an immersion scenario: "${scenario.title}".
+      if (!countErr && typeof count === "number" && count >= 100) {
+        return res.status(400).json({
+          error: "Session limit reached (100 turns). Please start a new conversation to continue practicing.",
+        });
+      }
+    } catch (countEx) {
+      console.warn("[Chat Vercel] Turn count check exception (non-fatal):", countEx.message);
+    }
+
+    // 4. Milestone 5.2: Atomically acquire per-conversation generation lease (90s)
+    // NOTE: This happens BEFORE quota reservation to prevent consuming quota on 409 conflict
+    const lease = await acquireLease(conversationId, userId, 90);
+    if (!lease.acquired) {
+      if (lease.code === "SESSION_COMPLETED") {
+        return res.status(400).json({ error: lease.reason });
+      }
+      return res.status(409).json({
+        error: lease.reason || "A response is already being generated for this conversation. Please wait.",
+      });
+    }
+
+    leaseAcquired = true;
+    activeLeaseToken = lease.token;
+    activeConversationId = conversationId;
+
+    // 5. Reserve quota AFTER lease acquisition and BEFORE provider call (PRD line 251, TODO 5.2)
+    const quota = await enforceQuota(userId, "ai", 60, 6);
+    if (!quota.allowed) {
+      await releaseLease(activeConversationId, activeLeaseToken);
+      leaseAcquired = false;
+      return res.status(429).json({ error: quota.reason });
+    }
+
+    try {
+      const models = ["gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.8-flash"];
+      // Bounded tutor context: retain latest 20 messages for relevant conversational memory (PRD 5.3)
+      const recentHistory = (Array.isArray(conversationHistory) ? conversationHistory : []).slice(-20);
+      const history = recentHistory.map((msg) => ({
+        role: msg.role === "assistant" ? "model" : "user",
+        parts: [{ text: msg.content }],
+      }));
+
+      // Feature 3: Dynamic persona & immersion instructions
+      let systemInstruction = `You are a helpful language tutor. The user is practicing ${language} at a ${level} level. Respond naturally in ${language}. Correct them gently if needed. Limit response to under 120 words.`;
+      if (scenario && scenario.title) {
+        const objectivesList = Array.isArray(scenario.objectives)
+          ? scenario.objectives.map((o) => `- ${o.text}`).join("\n")
+          : "";
+        systemInstruction = `You are roleplaying as ${scenario.aiRole || "a conversational partner"} in an immersion scenario: "${scenario.title}".
 Setting: ${scenario.setting || "Real-world conversational context"}.
 The user is ${scenario.userRole || "a language learner"}.
 Stay in character! Respond naturally, authentically, and warmly in ${language} calibrated for a ${level} level.
@@ -323,95 +502,102 @@ Keep replies conversational and concise (under 100 words) so the learner has amp
 Respond in character to naturally allow the user to achieve their mission objectives:
 ${objectivesList}
 Do not break character or list the objectives explicitly; roleplay authentically in ${language}.`;
-    }
-
-    const wantsStream = req.body.stream !== false;
-    let handled = false;
-    let lastModelError = null;
-
-    for (const modelName of models) {
-      try {
-        const model = genAI.getGenerativeModel({
-          model: modelName,
-          systemInstruction,
-        });
-
-        const chat = model.startChat({ history });
-
-        if (wantsStream) {
-          if (!res.headersSent) {
-            res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
-            res.setHeader("Cache-Control", "no-cache, no-transform");
-            res.setHeader("Connection", "keep-alive");
-            if (typeof res.flushHeaders === "function") res.flushHeaders();
-          }
-
-          const resultStream = await chat.sendMessageStream(message);
-          let fullReply = "";
-
-          for await (const chunk of resultStream.stream) {
-            const chunkText = chunk.text();
-            if (chunkText) {
-              fullReply += chunkText;
-              res.write(`data: ${JSON.stringify({ chunk: chunkText })}\n\n`);
-            }
-          }
-
-          // Save conversation turn using robust helper
-          const { userMsgId, assistantMsgId } = await saveChatTurn(conversationId, message, fullReply);
-
-          // Parallel analysis: Grammar check + Feature 3 Scenario Objective Evaluation
-          const [grammarFeedback, scenarioEvaluation] = await Promise.all([
-            analyzeGrammar(genAI, message, language, level).catch((gErr) => {
-              console.warn("[Grammar Vercel] Warning:", gErr.message);
-              return null;
-            }),
-            scenario
-              ? evaluateScenarioObjectives(genAI, scenario, message, fullReply, language).catch((sErr) => {
-                  console.warn("[Scenario Eval Vercel] Warning:", sErr.message);
-                  return null;
-                })
-              : Promise.resolve(null),
-          ]);
-
-          res.write(`data: ${JSON.stringify({ done: true, reply: fullReply, assistantMsgId, userMsgId, grammarFeedback, scenarioEvaluation })}\n\n`);
-          res.end();
-          handled = true;
-          break;
-        } else {
-          const result = await chat.sendMessage(message);
-          const reply = result.response.text();
-
-          // Save conversation turn using robust helper
-          const { userMsgId, assistantMsgId } = await saveChatTurn(conversationId, message, reply);
-
-          // Parallel analysis: Grammar check + Feature 3 Scenario Objective Evaluation
-          const [grammarFeedback, scenarioEvaluation] = await Promise.all([
-            analyzeGrammar(genAI, message, language, level).catch((gErr) => {
-              console.warn("[Grammar Vercel] Warning:", gErr.message);
-              return null;
-            }),
-            scenario
-              ? evaluateScenarioObjectives(genAI, scenario, message, reply, language).catch((sErr) => {
-                  console.warn("[Scenario Eval Vercel] Warning:", sErr.message);
-                  return null;
-                })
-              : Promise.resolve(null),
-          ]);
-
-          res.json({ reply, assistantMsgId, userMsgId, grammarFeedback, scenarioEvaluation });
-          handled = true;
-          break;
-        }
-      } catch (mErr) {
-        console.warn(`[Chat Vercel] Model ${modelName} failed (${mErr.message}), trying next...`);
-        lastModelError = mErr;
-        if (res.headersSent) break;
       }
-    }
 
-    if (!handled && lastModelError) {
-      throw lastModelError;
+      const wantsStream = req.body.stream !== false;
+      let handled = false;
+      let lastModelError = null;
+
+      for (const modelName of models) {
+        try {
+          const model = genAI.getGenerativeModel({
+            model: modelName,
+            systemInstruction,
+          });
+
+          const chat = model.startChat({ history });
+
+          if (wantsStream) {
+            if (!res.headersSent) {
+              res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
+              res.setHeader("Cache-Control", "no-cache, no-transform");
+              res.setHeader("Connection", "keep-alive");
+              if (typeof res.flushHeaders === "function") res.flushHeaders();
+            }
+
+            const resultStream = await chat.sendMessageStream(message);
+            let fullReply = "";
+
+            for await (const chunk of resultStream.stream) {
+              const chunkText = chunk.text();
+              if (chunkText) {
+                fullReply += chunkText;
+                res.write(`data: ${JSON.stringify({ chunk: chunkText })}\n\n`);
+              }
+            }
+
+            // Save conversation turn atomically requiring active lease token
+            const { userMsgId, assistantMsgId } = await saveChatTurn(conversationId, activeLeaseToken, message, fullReply);
+
+            // Parallel analysis: Grammar check + Feature 3 Scenario Objective Evaluation
+            const [grammarFeedback, scenarioEvaluation] = await Promise.all([
+              analyzeGrammar(genAI, message, language, level).catch((gErr) => {
+                console.warn("[Grammar Vercel] Warning:", gErr.message);
+                return null;
+              }),
+              scenario
+                ? evaluateScenarioObjectives(genAI, scenario, message, fullReply, language).catch((sErr) => {
+                    console.warn("[Scenario Eval Vercel] Warning:", sErr.message);
+                    return null;
+                  })
+                : Promise.resolve(null),
+            ]);
+
+            res.write(`data: ${JSON.stringify({ done: true, reply: fullReply, assistantMsgId, userMsgId, grammarFeedback, scenarioEvaluation })}\n\n`);
+            res.end();
+            handled = true;
+            break;
+          } else {
+            const result = await chat.sendMessage(message);
+            const reply = result.response.text();
+
+            // Save conversation turn atomically requiring active lease token
+            const { userMsgId, assistantMsgId } = await saveChatTurn(conversationId, activeLeaseToken, message, reply);
+
+            // Parallel analysis: Grammar check + Feature 3 Scenario Objective Evaluation
+            const [grammarFeedback, scenarioEvaluation] = await Promise.all([
+              analyzeGrammar(genAI, message, language, level).catch((gErr) => {
+                console.warn("[Grammar Vercel] Warning:", gErr.message);
+                return null;
+              }),
+              scenario
+                ? evaluateScenarioObjectives(genAI, scenario, message, reply, language).catch((sErr) => {
+                    console.warn("[Scenario Eval Vercel] Warning:", sErr.message);
+                    return null;
+                  })
+                : Promise.resolve(null),
+            ]);
+
+            res.json({ reply, assistantMsgId, userMsgId, grammarFeedback, scenarioEvaluation });
+            handled = true;
+            break;
+          }
+        } catch (mErr) {
+          console.warn(`[Chat Vercel] Model ${modelName} failed (${mErr.message}), trying next...`);
+          lastModelError = mErr;
+          if (res.headersSent) break;
+        }
+      }
+
+      if (!handled && lastModelError) {
+        throw lastModelError;
+      }
+    } finally {
+      // Milestone 5.2: Release the matching lease token in cleanup
+      if (leaseAcquired && activeConversationId && activeLeaseToken) {
+        await releaseLease(activeConversationId, activeLeaseToken);
+        leaseAcquired = false;
+      }
     }
   } catch (error) {
     console.error("Chat error:", error);

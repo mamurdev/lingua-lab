@@ -210,35 +210,136 @@ app.get("/api/usage", async (req, res) => {
   });
 });
 
-// Milestone 5.2: In-process concurrency lock per user
-// Prevents the same user from firing multiple AI requests simultaneously
-// (e.g. double-clicking Send or having the app open in two tabs).
-const activeRequests = new Map(); // userId -> Set of active operation keys
+// ==========================================
+// Milestone 5.2: Generation Leases & Session Turn Caps
+// ==========================================
 
-function acquireLock(userId, key) {
-  if (!userId) return true; // unauthenticated requests are not locked
-  if (!activeRequests.has(userId)) {
-    activeRequests.set(userId, new Set());
+// In-memory lease store: conversationId -> { token, expiresAt, userId }
+const inMemoryLeaseStore = new Map();
+
+function acquireInMemoryLease(conversationId, userId, durationSeconds = 90) {
+  const now = Date.now();
+  const existing = inMemoryLeaseStore.get(conversationId);
+  if (existing && existing.expiresAt > now) {
+    return {
+      acquired: false,
+      reason: "A response is already being generated for this conversation. Please wait.",
+    };
   }
-  const locks = activeRequests.get(userId);
-  if (locks.has(key)) {
-    return false; // Already in-flight
+
+  const token = typeof crypto !== "undefined" && crypto.randomUUID
+    ? crypto.randomUUID()
+    : `lease_${Date.now()}_${Math.random().toString(36).substring(2, 10)}`;
+  const expiresAt = now + durationSeconds * 1000;
+
+  inMemoryLeaseStore.set(conversationId, { token, expiresAt, userId });
+  return { acquired: true, token };
+}
+
+function releaseInMemoryLease(conversationId, token) {
+  const existing = inMemoryLeaseStore.get(conversationId);
+  if (existing && existing.token === token) {
+    inMemoryLeaseStore.delete(conversationId);
+    return true;
   }
-  locks.add(key);
+  return false;
+}
+
+function validateInMemoryLease(conversationId, token) {
+  const now = Date.now();
+  const existing = inMemoryLeaseStore.get(conversationId);
+  if (!existing || existing.token !== token || existing.expiresAt <= now) {
+    return false;
+  }
   return true;
 }
 
-function releaseLock(userId, key) {
-  if (!userId) return;
-  const locks = activeRequests.get(userId);
-  if (locks) {
-    locks.delete(key);
-    if (locks.size === 0) activeRequests.delete(userId);
+async function acquireLease(conversationId, userId, durationSeconds = 90) {
+  try {
+    const { data, error } = await supabaseAdmin.rpc("acquire_conversation_lease", {
+      p_conversation_id: conversationId,
+      p_user_id: userId,
+      p_lease_duration_seconds: durationSeconds,
+    });
+    if (!error && data && data.length > 0) {
+      const res = data[0];
+      if (res.acquired) {
+        inMemoryLeaseStore.set(conversationId, {
+          token: res.lease_token,
+          expiresAt: Date.now() + durationSeconds * 1000,
+          userId,
+        });
+        return { acquired: true, token: res.lease_token };
+      }
+      return {
+        acquired: false,
+        code: res.error_code,
+        reason: res.error_message || "A response is already being generated for this conversation. Please wait.",
+      };
+    }
+  } catch {
+    // Fallback to in-memory store
+  }
+  return acquireInMemoryLease(conversationId, userId, durationSeconds);
+}
+
+async function releaseLease(conversationId, token) {
+  if (!conversationId || !token) return;
+  releaseInMemoryLease(conversationId, token);
+  try {
+    await supabaseAdmin.rpc("release_conversation_lease", {
+      p_conversation_id: conversationId,
+      p_lease_token: token,
+    });
+  } catch {
+    // Non-fatal fallback
   }
 }
 
-// Robust helper to save chat turns: tries atomic RPC first, falls back to direct table inserts
-async function saveChatTurn(conversationId, userContent, assistantContent) {
+// Robust helper to save chat turns: enforces unexpired lease token, checks turn cap, tries atomic RPC first, falls back to direct table inserts
+async function saveChatTurn(conversationId, leaseToken, userContent, assistantContent) {
+  // Validate lease token in-memory if lease exists
+  if (leaseToken && inMemoryLeaseStore.has(conversationId) && !validateInMemoryLease(conversationId, leaseToken)) {
+    throw new Error("Stale or expired generation lease token");
+  }
+
+  // 1. Try atomic RPC save_chat_turn_with_lease
+  try {
+    const { data: savedTurn, error: saveError } = await supabaseAdmin.rpc("save_chat_turn_with_lease", {
+      p_conversation_id: conversationId,
+      p_lease_token: leaseToken,
+      p_user_content: userContent,
+      p_assistant_content: assistantContent,
+    });
+
+    if (!saveError && savedTurn && savedTurn.length > 0) {
+      return {
+        userMsgId: savedTurn[0].user_msg_id,
+        assistantMsgId: savedTurn[0].assistant_msg_id,
+      };
+    }
+    if (saveError) {
+      // If Postgres explicitly raised lease or cap exception, propagate that
+      if (
+        saveError.message &&
+        !saveError.message.includes("schema cache") &&
+        (saveError.message.includes("Invalid, stale, or expired") || saveError.message.includes("Session limit reached"))
+      ) {
+        throw new Error(saveError.message);
+      }
+      console.warn(`[Chat] save_chat_turn_with_lease RPC notice (${saveError.message}), using fallback...`);
+    }
+  } catch (rpcErr) {
+    if (
+      rpcErr.message &&
+      !rpcErr.message.includes("schema cache") &&
+      (rpcErr.message.includes("Invalid, stale, or expired") || rpcErr.message.includes("Session limit reached"))
+    ) {
+      throw rpcErr;
+    }
+  }
+
+  // 2. Try legacy save_chat_turn RPC
   try {
     const { data: savedTurn, error: saveError } = await supabaseAdmin.rpc("save_chat_turn", {
       p_conversation_id: conversationId,
@@ -252,14 +353,15 @@ async function saveChatTurn(conversationId, userContent, assistantContent) {
         assistantMsgId: savedTurn[0].assistant_msg_id,
       };
     }
-    if (saveError) {
-      console.warn(`[Chat] save_chat_turn RPC notice (${saveError.message}), using direct insert fallback.`);
-    }
-  } catch (rpcErr) {
-    console.warn("[Chat] save_chat_turn RPC exception, using direct insert fallback:", rpcErr);
+  } catch {
+    // Fallback to direct table insert below
   }
 
-  // Direct table insert fallback
+  // 2. Direct table insert fallback (with unexpired lease check)
+  if (leaseToken && inMemoryLeaseStore.has(conversationId) && !validateInMemoryLease(conversationId, leaseToken)) {
+    throw new Error("Stale or expired generation lease token");
+  }
+
   const { data: lastMsg } = await supabaseAdmin
     .from("messages")
     .select("sequence")
@@ -420,8 +522,12 @@ Return strictly valid JSON:
   return { completedIds: [] };
 }
 
-// Milestone 2, 5.1 & 5.2: Chat generation with quota + concurrency checking
+// Milestone 2, 5.1 & 5.2: Chat generation with quota + lease concurrency checking
 app.post("/api/chat", async (req, res) => {
+  let leaseAcquired = false;
+  let activeLeaseToken = null;
+  let activeConversationId = null;
+
   try {
     const authHeader = req.headers.authorization;
     const token = authHeader ? authHeader.replace("Bearer ", "") : null;
@@ -436,12 +542,6 @@ app.post("/api/chat", async (req, res) => {
       return res.status(401).json({ error: "Authentication required" });
     }
 
-    // Enforce 5.1 spending controls (60 AI requests/day, 6/min)
-    const quota = await enforceQuota(userId, "ai", 60, 6);
-    if (!quota.allowed) {
-      return res.status(429).json({ error: quota.reason });
-    }
-
     const {
       message,
       language = "English",
@@ -451,11 +551,18 @@ app.post("/api/chat", async (req, res) => {
       scenario,
     } = req.body;
 
-    if (!message || !conversationId) {
-      return res.status(400).json({ error: "Missing message or conversationId" });
+    // 1. Validate inputs (PRD lines 251, 324)
+    if (!message || typeof message !== "string" || message.trim().length === 0) {
+      return res.status(400).json({ error: "Message cannot be empty" });
+    }
+    if (message.length > 2000) {
+      return res.status(400).json({ error: "Message exceeds maximum length of 2,000 characters" });
+    }
+    if (!conversationId || typeof conversationId !== "string") {
+      return res.status(400).json({ error: "Missing or invalid conversationId" });
     }
 
-    // Verify conversation ownership before acquiring lock
+    // 2. Verify conversation ownership
     const { data: conv, error: convError } = await supabaseAdmin
       .from("conversations")
       .select("id, user_id")
@@ -467,15 +574,52 @@ app.post("/api/chat", async (req, res) => {
       return res.status(404).json({ error: "Conversation not found or access denied" });
     }
 
-    // Milestone 5.2: Prevent concurrent AI requests for the same conversation
-    const lockKey = `chat:${conversationId}`;
-    if (!acquireLock(userId, lockKey)) {
-      return res.status(409).json({ error: "A response is already being generated for this conversation. Please wait." });
+    // 3. Cap sessions at 100 complete turns (PRD lines 277, 332, TODO 5.2)
+    try {
+      const { count, error: countErr } = await supabaseAdmin
+        .from("messages")
+        .select("id", { count: "exact", head: true })
+        .eq("conversation_id", conversationId)
+        .eq("role", "assistant");
+
+      if (!countErr && typeof count === "number" && count >= 100) {
+        return res.status(400).json({
+          error: "Session limit reached (100 turns). Please start a new conversation to continue practicing.",
+        });
+      }
+    } catch (countEx) {
+      console.warn("[Chat] Turn count check exception (non-fatal):", countEx.message);
+    }
+
+    // 4. Milestone 5.2: Atomically acquire per-conversation generation lease (90s)
+    // NOTE: This happens BEFORE quota reservation to prevent consuming quota on 409 conflict
+    const lease = await acquireLease(conversationId, userId, 90);
+    if (!lease.acquired) {
+      if (lease.code === "SESSION_COMPLETED") {
+        return res.status(400).json({ error: lease.reason });
+      }
+      return res.status(409).json({
+        error: lease.reason || "A response is already being generated for this conversation. Please wait.",
+      });
+    }
+
+    leaseAcquired = true;
+    activeLeaseToken = lease.token;
+    activeConversationId = conversationId;
+
+    // 5. Reserve quota AFTER lease acquisition and BEFORE provider call (PRD line 251, TODO 5.2)
+    const quota = await enforceQuota(userId, "ai", 60, 6);
+    if (!quota.allowed) {
+      await releaseLease(activeConversationId, activeLeaseToken);
+      leaseAcquired = false;
+      return res.status(429).json({ error: quota.reason });
     }
 
     try {
       const models = ["gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.8-flash"];
-      const history = conversationHistory.map((msg) => ({
+      // Bounded tutor context: retain latest 20 messages for relevant conversational memory (PRD 5.3)
+      const recentHistory = (Array.isArray(conversationHistory) ? conversationHistory : []).slice(-20);
+      const history = recentHistory.map((msg) => ({
         role: msg.role === "assistant" ? "model" : "user",
         parts: [{ text: msg.content }],
       }));
@@ -528,8 +672,8 @@ Do not break character or list the objectives explicitly; roleplay authentically
               }
             }
 
-            // Save conversation turn using robust helper
-            const { userMsgId, assistantMsgId } = await saveChatTurn(conversationId, message, fullReply);
+            // Save conversation turn atomically requiring active lease token
+            const { userMsgId, assistantMsgId } = await saveChatTurn(conversationId, activeLeaseToken, message, fullReply);
 
             // Parallel analysis: Grammar check + Feature 3 Scenario Objective Evaluation
             const [grammarFeedback, scenarioEvaluation] = await Promise.all([
@@ -553,8 +697,8 @@ Do not break character or list the objectives explicitly; roleplay authentically
             const result = await chat.sendMessage(message);
             const reply = result.response.text();
 
-            // Save conversation turn using robust helper
-            const { userMsgId, assistantMsgId } = await saveChatTurn(conversationId, message, reply);
+            // Save conversation turn atomically requiring active lease token
+            const { userMsgId, assistantMsgId } = await saveChatTurn(conversationId, activeLeaseToken, message, reply);
 
             // Parallel analysis: Grammar check + Feature 3 Scenario Objective Evaluation
             const [grammarFeedback, scenarioEvaluation] = await Promise.all([
@@ -588,7 +732,11 @@ Do not break character or list the objectives explicitly; roleplay authentically
         throw lastModelError;
       }
     } finally {
-      releaseLock(userId, lockKey);
+      // Milestone 5.2: Release the matching lease token in cleanup
+      if (leaseAcquired && activeConversationId && activeLeaseToken) {
+        await releaseLease(activeConversationId, activeLeaseToken);
+        leaseAcquired = false;
+      }
     }
   } catch (error) {
     console.error("Chat error:", error);
