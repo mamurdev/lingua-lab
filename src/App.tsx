@@ -34,11 +34,11 @@ export default function App() {
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center text-slate-500 gap-3">
-        <div className="w-11 h-11 rounded-2xl bg-white border border-slate-200 shadow-sm flex items-center justify-center text-blue-600 font-bold text-base animate-pulse">
+      <div className="min-h-screen bg-slate-50 dark:bg-[#07090e] flex flex-col items-center justify-center text-slate-500 dark:text-slate-400 gap-3">
+        <div className="w-11 h-11 rounded-2xl bg-white dark:bg-[#0d121f] border border-slate-200/90 dark:border-white/[0.08] shadow-sm flex items-center justify-center text-blue-600 font-bold text-base animate-pulse">
           LL
         </div>
-        <p className="text-xs font-medium text-slate-500">Loading Lingua Lab...</p>
+        <p className="text-xs font-medium text-slate-500 dark:text-slate-400">Loading Lingua Lab...</p>
       </div>
     );
   }

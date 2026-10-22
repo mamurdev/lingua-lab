@@ -145,28 +145,28 @@ export default function VocabularyDeckView({
   return (
     <div className="flex-1 p-4 sm:p-6 overflow-y-auto max-w-3xl w-full mx-auto space-y-6">
       {/* Header and Controls */}
-      <div className="flex flex-wrap justify-between items-center gap-4 pb-4 border-b border-slate-200">
+      <div className="flex flex-wrap justify-between items-center gap-4 pb-4 border-b border-slate-200 dark:border-slate-800">
         <div>
-          <h2 className="text-base font-bold tracking-tight text-slate-900 flex items-center gap-2">
+          <h2 className="text-base font-bold tracking-tight text-slate-900 dark:text-white flex items-center gap-2">
             <span>Vocabulary Deck</span>
-            <span className="text-[11px] font-mono bg-blue-50 text-blue-700 px-2.5 py-0.5 rounded-full border border-blue-200 font-semibold">
+            <span className="text-[11px] font-mono bg-blue-50 dark:bg-blue-950/50 text-blue-700 dark:text-blue-300 px-2.5 py-0.5 rounded-full border border-blue-200 dark:border-blue-800 font-semibold">
               {filteredVocabulary.length} {filteredVocabulary.length === 1 ? 'word' : 'words'}
             </span>
           </h2>
-          <p className="text-xs text-slate-500 mt-0.5">
+          <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
             Click words in chat to save them. Review with spaced repetition to build long-term memory.
           </p>
         </div>
 
         <div className="flex items-center gap-2">
           {/* Sub-tab Switcher */}
-          <div className="bg-slate-100 p-1 rounded-xl border border-slate-200 flex items-center gap-1 text-xs">
+          <div className="bg-slate-100 dark:bg-slate-800/80 p-1 rounded-xl border border-slate-200 dark:border-slate-700 flex items-center gap-1 text-xs">
             <button
               onClick={() => setActiveSubTab('flashcards')}
               className={`px-3 py-1.5 rounded-lg transition-all ${
                 activeSubTab === 'flashcards'
-                  ? 'bg-white text-slate-900 shadow-sm font-semibold'
-                  : 'text-slate-500 hover:text-slate-800'
+                  ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-sm font-semibold'
+                  : 'text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200'
               }`}
             >
               🃏 Flashcards {dueCards.length > 0 && `(${dueCards.length})`}
@@ -175,8 +175,8 @@ export default function VocabularyDeckView({
               onClick={() => setActiveSubTab('list')}
               className={`px-3 py-1.5 rounded-lg transition-all ${
                 activeSubTab === 'list'
-                  ? 'bg-white text-slate-900 shadow-sm font-semibold'
-                  : 'text-slate-500 hover:text-slate-800'
+                  ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-sm font-semibold'
+                  : 'text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200'
               }`}
             >
               📖 Word Bank
@@ -200,8 +200,8 @@ export default function VocabularyDeckView({
             onClick={() => setFilterLang('all')}
             className={`px-3 py-1 rounded-lg border font-medium transition-all ${
               filterLang === 'all'
-                ? 'bg-blue-50 border-blue-500 text-blue-900 font-semibold'
-                : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
+                ? 'bg-blue-50 dark:bg-blue-950/50 border-blue-500 dark:border-blue-500 text-blue-900 dark:text-blue-300 font-semibold'
+                : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-800'
             }`}
           >
             All Languages
@@ -212,8 +212,8 @@ export default function VocabularyDeckView({
               onClick={() => setFilterLang(lang)}
               className={`px-3 py-1 rounded-lg border font-medium transition-all ${
                 filterLang.toLowerCase() === lang.toLowerCase()
-                  ? 'bg-blue-50 border-blue-500 text-blue-900 font-semibold'
-                  : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
+                  ? 'bg-blue-50 dark:bg-blue-950/50 border-blue-500 dark:border-blue-500 text-blue-900 dark:text-blue-300 font-semibold'
+                  : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-800'
               }`}
             >
               {lang}
@@ -228,7 +228,7 @@ export default function VocabularyDeckView({
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               placeholder="Search saved words..."
-              className="w-full px-3 py-1.5 bg-white border border-slate-200 rounded-xl text-xs text-slate-900 placeholder:text-slate-400 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-100"
+              className="w-full px-3 py-1.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl text-xs text-slate-900 dark:text-white placeholder:text-slate-400 dark:placeholder:text-slate-500 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-100"
             />
           </div>
         )}
@@ -237,12 +237,12 @@ export default function VocabularyDeckView({
       {/* Mode 1: Flashcards View */}
       {activeSubTab === 'flashcards' ? (
         filteredVocabulary.length === 0 ? (
-          <div className="text-center p-12 bg-white rounded-2xl border border-dashed border-slate-300 space-y-3">
-            <div className="w-12 h-12 rounded-2xl bg-blue-50 border border-blue-200 flex items-center justify-center mx-auto text-xl text-blue-600">
+          <div className="text-center p-12 bg-white dark:bg-slate-900/50 rounded-2xl border border-dashed border-slate-300 dark:border-slate-800 space-y-3">
+            <div className="w-12 h-12 rounded-2xl bg-blue-50 dark:bg-blue-950/40 border border-blue-200 dark:border-blue-800 flex items-center justify-center mx-auto text-xl text-blue-600 dark:text-blue-400">
               🗂️
             </div>
-            <h3 className="text-sm font-semibold text-slate-900">Your vocabulary deck is empty</h3>
-            <p className="text-xs text-slate-500 max-w-sm mx-auto">
+            <h3 className="text-sm font-semibold text-slate-900 dark:text-white">Your vocabulary deck is empty</h3>
+            <p className="text-xs text-slate-500 dark:text-slate-400 max-w-sm mx-auto">
               Tap any foreign word in your tutor's messages to look up its definition and save it here.
             </p>
             <button
@@ -253,20 +253,20 @@ export default function VocabularyDeckView({
             </button>
           </div>
         ) : dueCards.length === 0 && !reviewAllOverride ? (
-          <div className="text-center p-12 bg-white rounded-2xl border border-slate-200 space-y-4 shadow-sm">
-            <div className="w-12 h-12 rounded-2xl bg-emerald-50 border border-emerald-200 flex items-center justify-center mx-auto text-xl text-emerald-600">
+          <div className="text-center p-12 bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 space-y-4 shadow-sm">
+            <div className="w-12 h-12 rounded-2xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 flex items-center justify-center mx-auto text-xl text-emerald-600 dark:text-emerald-400">
               🎉
             </div>
             <div>
-              <h3 className="text-base font-bold text-slate-900">All caught up!</h3>
-              <p className="text-xs text-slate-500 mt-1 max-w-sm mx-auto">
+              <h3 className="text-base font-bold text-slate-900 dark:text-white">All caught up!</h3>
+              <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 max-w-sm mx-auto">
                 You've reviewed all cards due for today. Great job keeping your memory fresh!
               </p>
             </div>
             <div className="pt-2">
               <button
                 onClick={() => setReviewAllOverride(true)}
-                className="px-4 py-2 bg-slate-100 hover:bg-slate-200 border border-slate-200 rounded-xl text-xs font-semibold text-slate-700 transition-colors"
+                className="px-4 py-2 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-semibold text-slate-700 dark:text-slate-300 transition-colors"
               >
                 Review All {filteredVocabulary.length} Cards Anyway
               </button>
@@ -275,11 +275,11 @@ export default function VocabularyDeckView({
         ) : activeCard ? (
           <div className="space-y-4">
             {/* Progress indicator */}
-            <div className="flex justify-between items-center text-xs text-slate-500 font-mono">
+            <div className="flex justify-between items-center text-xs text-slate-500 dark:text-slate-400 font-mono">
               <span>
                 Card {currentCardIndex + 1} of {dueCards.length}
               </span>
-              <span className="capitalize px-2 py-0.5 rounded-full text-[10px] font-semibold bg-slate-100 text-slate-600 border border-slate-200">
+              <span className="capitalize px-2 py-0.5 rounded-full text-[10px] font-semibold bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700">
                 {activeCard.mastery}
               </span>
             </div>
@@ -287,10 +287,10 @@ export default function VocabularyDeckView({
             {/* Flashcard Box */}
             <div
               onClick={() => setIsFlipped(!isFlipped)}
-              className="min-h-[260px] bg-white border border-slate-200 hover:border-blue-300 rounded-2xl p-6 sm:p-8 flex flex-col justify-between cursor-pointer transition-all shadow-sm hover:shadow-md relative select-none"
+              className="min-h-[260px] bg-white dark:bg-[#0d121f] border border-slate-200/90 dark:border-white/[0.08] hover:border-blue-300 dark:hover:border-blue-500/50 rounded-2xl p-6 sm:p-8 flex flex-col justify-between cursor-pointer transition-all shadow-sm hover:shadow-md dark:shadow-[inset_0_1px_0_0_rgba(255,255,255,0.05)] relative select-none"
             >
               <div className="flex justify-between items-start">
-                <span className="text-[10px] font-mono uppercase tracking-wider px-2 py-0.5 rounded bg-blue-50 text-blue-700 border border-blue-200 font-semibold">
+                <span className="text-[10px] font-mono uppercase tracking-wider px-2 py-0.5 rounded bg-blue-50/80 dark:bg-blue-600/15 text-blue-700 dark:text-blue-300 border border-blue-200/80 dark:border-blue-500/30 font-semibold">
                   {activeCard.language}
                 </span>
 
@@ -301,7 +301,7 @@ export default function VocabularyDeckView({
                       e.stopPropagation();
                       onPlayAudio(activeCard.word);
                     }}
-                    className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors"
+                    className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-white/[0.06] transition-colors"
                     title="Pronounce word"
                   >
                     🔊
@@ -312,30 +312,30 @@ export default function VocabularyDeckView({
               {/* Card Center Content */}
               {!isFlipped ? (
                 <div className="text-center py-8 space-y-2">
-                  <h3 className="text-3xl font-extrabold text-slate-900 tracking-tight">
+                  <h3 className="text-3xl font-extrabold text-slate-900 dark:text-white tracking-tight">
                     {activeCard.word}
                   </h3>
                   {activeCard.phonetic && (
-                    <p className="text-sm font-mono text-slate-400">{activeCard.phonetic}</p>
+                    <p className="text-sm font-mono text-slate-400 dark:text-slate-500">{activeCard.phonetic}</p>
                   )}
                   {activeCard.partOfSpeech && (
-                    <p className="text-xs text-slate-500 italic">{activeCard.partOfSpeech}</p>
+                    <p className="text-xs text-slate-500 dark:text-slate-400 italic">{activeCard.partOfSpeech}</p>
                   )}
-                  <p className="text-xs text-blue-600 font-medium pt-3">Tap to flip & reveal answer ↵</p>
+                  <p className="text-xs text-blue-600 dark:text-blue-400 font-medium pt-3">Tap to flip & reveal answer ↵</p>
                 </div>
               ) : (
                 <div className="text-center py-6 space-y-3 animate-in fade-in zoom-in-95 duration-150">
-                  <div className="text-xs uppercase font-mono tracking-wider text-slate-400 font-semibold">
+                  <div className="text-xs uppercase font-mono tracking-wider text-slate-400 dark:text-slate-500 font-semibold">
                     Translation
                   </div>
-                  <h3 className="text-2xl font-bold text-slate-900">{activeCard.translation}</h3>
+                  <h3 className="text-2xl font-bold text-slate-900 dark:text-white">{activeCard.translation}</h3>
                   {activeCard.explanation && (
-                    <p className="text-xs text-slate-600 max-w-md mx-auto leading-relaxed">
+                    <p className="text-xs text-slate-600 dark:text-slate-300 max-w-md mx-auto leading-relaxed">
                       {activeCard.explanation}
                     </p>
                   )}
                   {activeCard.context && (
-                    <div className="text-xs text-slate-500 bg-slate-50 p-2.5 rounded-xl border border-slate-100 italic max-w-md mx-auto">
+                    <div className="text-xs text-slate-500 dark:text-slate-400 bg-slate-50 dark:bg-white/[0.04] p-2.5 rounded-xl border border-slate-100 dark:border-white/[0.06] italic max-w-md mx-auto">
                       "{activeCard.context}"
                     </div>
                   )}
@@ -343,7 +343,7 @@ export default function VocabularyDeckView({
               )}
 
               {/* Flip reminder */}
-              <div className="text-center text-[11px] text-slate-400">
+              <div className="text-center text-[11px] text-slate-400 dark:text-slate-500">
                 {isFlipped ? 'How well did you remember this?' : 'Flip card to grade yourself'}
               </div>
             </div>
@@ -354,26 +354,26 @@ export default function VocabularyDeckView({
                 <button
                   type="button"
                   onClick={() => handleRateCard('again')}
-                  className="p-3 rounded-xl border border-rose-200 bg-rose-50 hover:bg-rose-100/80 text-rose-800 text-xs font-semibold transition-all shadow-xs flex flex-col items-center justify-center gap-0.5"
+                  className="p-3 rounded-xl border border-rose-200 dark:border-rose-900/60 bg-rose-50 dark:bg-rose-950/30 hover:bg-rose-100/80 dark:hover:bg-rose-950/50 text-rose-800 dark:text-rose-300 text-xs font-semibold transition-all shadow-xs flex flex-col items-center justify-center gap-0.5"
                 >
                   <span className="font-bold text-sm">Hard</span>
-                  <span className="text-[10px] font-mono text-rose-600">Review in 1d</span>
+                  <span className="text-[10px] font-mono text-rose-600 dark:text-rose-400">Review in 1d</span>
                 </button>
                 <button
                   type="button"
                   onClick={() => handleRateCard('good')}
-                  className="p-3 rounded-xl border border-amber-200 bg-amber-50 hover:bg-amber-100/80 text-amber-800 text-xs font-semibold transition-all shadow-xs flex flex-col items-center justify-center gap-0.5"
+                  className="p-3 rounded-xl border border-amber-200 dark:border-amber-900/60 bg-amber-50 dark:bg-amber-950/30 hover:bg-amber-100/80 dark:hover:bg-amber-950/50 text-amber-800 dark:text-amber-300 text-xs font-semibold transition-all shadow-xs flex flex-col items-center justify-center gap-0.5"
                 >
                   <span className="font-bold text-sm">Good</span>
-                  <span className="text-[10px] font-mono text-amber-600">Review in 3d</span>
+                  <span className="text-[10px] font-mono text-amber-600 dark:text-amber-400">Review in 3d</span>
                 </button>
                 <button
                   type="button"
                   onClick={() => handleRateCard('easy')}
-                  className="p-3 rounded-xl border border-emerald-200 bg-emerald-50 hover:bg-emerald-100/80 text-emerald-800 text-xs font-semibold transition-all shadow-xs flex flex-col items-center justify-center gap-0.5"
+                  className="p-3 rounded-xl border border-emerald-200 dark:border-emerald-900/60 bg-emerald-50 dark:bg-emerald-950/30 hover:bg-emerald-100/80 dark:hover:bg-emerald-950/50 text-emerald-800 dark:text-emerald-300 text-xs font-semibold transition-all shadow-xs flex flex-col items-center justify-center gap-0.5"
                 >
                   <span className="font-bold text-sm">Easy</span>
-                  <span className="text-[10px] font-mono text-emerald-600">Review in 7d</span>
+                  <span className="text-[10px] font-mono text-emerald-600 dark:text-emerald-400">Review in 7d</span>
                 </button>
               </div>
             )}
@@ -383,39 +383,39 @@ export default function VocabularyDeckView({
         /* Mode 2: Word Bank Table / Card List */
         <div className="space-y-3">
           {filteredVocabulary.length === 0 ? (
-            <div className="text-center p-12 bg-white rounded-2xl border border-dashed border-slate-300 text-xs text-slate-500">
+            <div className="text-center p-12 bg-white dark:bg-slate-900/50 rounded-2xl border border-dashed border-slate-300 dark:border-slate-800 text-xs text-slate-500 dark:text-slate-400">
               No vocabulary words match your search or filter.
             </div>
           ) : (
             filteredVocabulary.map((item) => (
               <div
                 key={item.id}
-                className="bg-white border border-slate-200 hover:border-slate-300 p-4 rounded-xl flex items-center justify-between gap-4 transition-all shadow-xs group"
+                className="bg-white dark:bg-[#0f1628] border border-slate-200/90 dark:border-white/[0.08] hover:border-slate-300 dark:hover:border-white/[0.16] p-4 rounded-xl flex items-center justify-between gap-4 transition-all shadow-xs group"
               >
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 flex-wrap">
-                    <span className="font-bold text-sm text-slate-900">{item.word}</span>
+                    <span className="font-bold text-sm text-slate-900 dark:text-white">{item.word}</span>
                     {item.phonetic && (
-                      <span className="text-xs font-mono text-slate-400">{item.phonetic}</span>
+                      <span className="text-xs font-mono text-slate-400 dark:text-slate-500">{item.phonetic}</span>
                     )}
-                    <span className="text-[10px] font-mono uppercase tracking-wider px-2 py-0.5 rounded bg-blue-50 text-blue-700 border border-blue-200 font-semibold">
+                    <span className="text-[10px] font-mono uppercase tracking-wider px-2 py-0.5 rounded bg-blue-50/80 dark:bg-blue-600/15 text-blue-700 dark:text-blue-300 border border-blue-200/80 dark:border-blue-500/30 font-semibold">
                       {item.language}
                     </span>
                     <span
                       className={`text-[10px] font-mono px-2 py-0.5 rounded-md font-semibold border ${
                         item.mastery === 'mastered'
-                          ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                          ? 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-800 dark:text-emerald-300 border-emerald-200/80 dark:border-emerald-800/60'
                           : item.mastery === 'reviewing'
-                          ? 'bg-amber-50 text-amber-800 border-amber-200'
-                          : 'bg-slate-100 text-slate-600 border-slate-200'
+                          ? 'bg-amber-50 dark:bg-amber-950/40 text-amber-800 dark:text-amber-300 border-amber-200/80 dark:border-amber-800/60'
+                          : 'bg-slate-100 dark:bg-white/[0.06] text-slate-600 dark:text-slate-300 border-slate-200/80 dark:border-white/[0.08]'
                       }`}
                     >
                       {item.mastery}
                     </span>
                   </div>
-                  <div className="text-xs font-semibold text-slate-700 mt-1">{item.translation}</div>
+                  <div className="text-xs font-semibold text-slate-700 dark:text-slate-300 mt-1">{item.translation}</div>
                   {item.explanation && (
-                    <p className="text-[11px] text-slate-500 mt-0.5 truncate">{item.explanation}</p>
+                    <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5 truncate">{item.explanation}</p>
                   )}
                 </div>
 
@@ -424,7 +424,7 @@ export default function VocabularyDeckView({
                     <button
                       type="button"
                       onClick={() => onPlayAudio(item.word)}
-                      className="p-2 rounded-lg text-slate-500 hover:text-slate-800 hover:bg-slate-100 transition-colors text-xs"
+                      className="p-2 rounded-lg text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-white/[0.06] transition-colors text-xs"
                       title="Pronounce word"
                     >
                       🔊
@@ -433,7 +433,7 @@ export default function VocabularyDeckView({
                   <button
                     type="button"
                     onClick={(e) => handleDeleteItem(item.id, e)}
-                    className="p-2 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors text-xs"
+                    className="p-2 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/30 transition-colors text-xs"
                     title="Remove from vocabulary"
                   >
                     🗑️
@@ -447,16 +447,16 @@ export default function VocabularyDeckView({
 
       {/* Manual Add Word Modal */}
       {showAddModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-xs animate-in fade-in duration-150">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-in fade-in duration-150">
           <div
-            className="w-full max-w-sm bg-white rounded-2xl border border-slate-200 p-6 shadow-2xl space-y-4"
+            className="w-full max-w-sm bg-white dark:bg-[#0d121f] rounded-2xl border border-slate-200/90 dark:border-white/[0.09] p-6 shadow-2xl space-y-4"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex justify-between items-center">
-              <h3 className="text-base font-bold text-slate-900">Add Vocabulary Word</h3>
+              <h3 className="text-base font-bold text-slate-900 dark:text-white">Add Vocabulary Word</h3>
               <button
                 onClick={() => setShowAddModal(false)}
-                className="w-7 h-7 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-100 flex items-center justify-center text-sm font-semibold"
+                className="w-7 h-7 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 hover:bg-slate-100 dark:hover:bg-white/[0.06] flex items-center justify-center text-sm font-semibold"
               >
                 ✕
               </button>
@@ -464,32 +464,32 @@ export default function VocabularyDeckView({
 
             <form onSubmit={handleManualAdd} className="space-y-3.5">
               <div className="space-y-1">
-                <label className="block text-xs font-semibold text-slate-700">Word</label>
+                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300">Word</label>
                 <input
                   type="text"
                   value={newWord}
                   onChange={(e) => setNewWord(e.target.value)}
                   placeholder="e.g. bibliothèque"
                   required
-                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm text-slate-900 placeholder:text-slate-400 focus:bg-white focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-100"
+                  className="w-full px-3 py-2 bg-slate-50 dark:bg-[#090d16] border border-slate-200 dark:border-white/[0.08] rounded-xl text-sm text-slate-900 dark:text-white placeholder:text-slate-400 dark:placeholder:text-slate-500 focus:bg-white dark:focus:bg-[#12192b] focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-100 dark:focus:ring-blue-500/20"
                 />
               </div>
 
               <div className="space-y-1">
-                <label className="block text-xs font-semibold text-slate-700">
-                  Translation <span className="text-slate-400 font-normal">(optional, auto-translated)</span>
+                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300">
+                  Translation <span className="text-slate-400 dark:text-slate-500 font-normal">(optional, auto-translated)</span>
                 </label>
                 <input
                   type="text"
                   value={newTranslation}
                   onChange={(e) => setNewTranslation(e.target.value)}
                   placeholder="Leave empty to auto-translate"
-                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm text-slate-900 placeholder:text-slate-400 focus:bg-white focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-100"
+                  className="w-full px-3 py-2 bg-slate-50 dark:bg-[#090d16] border border-slate-200 dark:border-white/[0.08] rounded-xl text-sm text-slate-900 dark:text-white placeholder:text-slate-400 dark:placeholder:text-slate-500 focus:bg-white dark:focus:bg-[#12192b] focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-100 dark:focus:ring-blue-500/20"
                 />
               </div>
 
               {addError && (
-                <div className="p-2.5 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-700">
+                <div className="p-2.5 bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-900/60 rounded-xl text-xs text-rose-700 dark:text-rose-300">
                   {addError}
                 </div>
               )}
@@ -498,14 +498,14 @@ export default function VocabularyDeckView({
                 <button
                   type="button"
                   onClick={() => setShowAddModal(false)}
-                  className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-600 hover:bg-slate-100 transition-colors"
+                  className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-white/[0.06] transition-colors"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
                   disabled={addingLoading || !newWord.trim()}
-                  className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-semibold transition-all shadow-xs disabled:opacity-50 flex items-center gap-1.5"
+                  className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-semibold transition-all shadow-sm shadow-blue-500/25 disabled:opacity-50 flex items-center gap-1.5"
                 >
                   {addingLoading ? (
                     <>

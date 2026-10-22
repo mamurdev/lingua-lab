@@ -5,6 +5,53 @@ const supabaseAdmin = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_PUBLISHABLE_KEY
 );
 
+const inMemoryQuotaStore = new Map();
+
+function getUtcDateString(d = new Date()) {
+  return d.toISOString().split("T")[0];
+}
+
+function enforceInMemoryQuota(userId, kind, dayLimit = 30, minuteLimit = 6) {
+  const now = new Date();
+  const today = getUtcDateString(now);
+  const currentMinute = Math.floor(now.getTime() / 60000);
+  const storeKey = `${userId}:${kind}`;
+
+  let record = inMemoryQuotaStore.get(storeKey);
+  if (!record) {
+    record = { day: today, dayCount: 0, minuteWindow: currentMinute, minuteCount: 0 };
+    inMemoryQuotaStore.set(storeKey, record);
+  }
+
+  if (record.day !== today) {
+    record.day = today;
+    record.dayCount = 0;
+  }
+
+  if (record.minuteWindow !== currentMinute) {
+    record.minuteWindow = currentMinute;
+    record.minuteCount = 0;
+  }
+
+  if (record.dayCount >= dayLimit) {
+    return {
+      allowed: false,
+      reason: `Daily limit reached (${dayLimit} ${kind.toUpperCase()} requests/day). Resets at 00:00 UTC.`,
+    };
+  }
+
+  if (record.minuteCount >= minuteLimit) {
+    return {
+      allowed: false,
+      reason: `Rate limit exceeded (${minuteLimit} requests/min). Please wait a few moments.`,
+    };
+  }
+
+  record.dayCount += 1;
+  record.minuteCount += 1;
+  return { allowed: true };
+}
+
 async function enforceQuota(userId, kind, dayLimit = 30, minuteLimit = 6) {
   if (!userId) return { allowed: true };
   try {
@@ -14,13 +61,15 @@ async function enforceQuota(userId, kind, dayLimit = 30, minuteLimit = 6) {
       p_day_limit: dayLimit,
       p_minute_limit: minuteLimit,
     });
-    if (error) return { allowed: true };
-    const row = data && data[0];
-    if (row && !row.allowed) return { allowed: false, reason: row.reason };
-    return { allowed: true };
+    if (!error && data && data.length > 0) {
+      const row = data[0];
+      if (!row.allowed) return { allowed: false, reason: row.reason || "Quota limit reached" };
+      return { allowed: true };
+    }
   } catch {
-    return { allowed: true };
+    // fallback
   }
+  return enforceInMemoryQuota(userId, kind, dayLimit, minuteLimit);
 }
 
 async function synthesizeSpeech(text, preferredVoiceId, apiKey) {

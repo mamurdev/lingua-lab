@@ -90,33 +90,33 @@ export default function WordLookupModal({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-xs animate-in fade-in duration-150">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 dark:bg-black/70 backdrop-blur-xs animate-in fade-in duration-150">
       <div
-        className="w-full max-w-sm bg-white rounded-2xl border border-slate-200 p-5 shadow-2xl shadow-slate-900/10 space-y-4 animate-in zoom-in-95 duration-150"
+        className="w-full max-w-sm bg-white dark:bg-[#0d121f] rounded-2xl border border-slate-200/90 dark:border-white/[0.09] p-5 shadow-2xl dark:shadow-black/70 space-y-4 animate-in zoom-in-95 duration-150 transition-colors duration-200"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
         <div className="flex items-start justify-between gap-3">
           <div>
             <div className="flex items-center gap-2">
-              <span className="text-xl font-bold tracking-tight text-slate-900">{cleanWord}</span>
+              <span className="text-xl font-bold tracking-tight text-slate-900 dark:text-white">{cleanWord}</span>
               {data?.phonetic && (
-                <span className="text-xs font-mono text-slate-400">{data.phonetic}</span>
+                <span className="text-xs font-mono text-slate-400 dark:text-slate-500">{data.phonetic}</span>
               )}
             </div>
             <div className="flex items-center gap-2 mt-0.5">
-              <span className="text-[10px] font-mono uppercase tracking-wider px-2 py-0.5 rounded bg-blue-50 text-blue-700 border border-blue-200 font-semibold">
+              <span className="text-[10px] font-mono uppercase tracking-wider px-2 py-0.5 rounded bg-blue-50/80 dark:bg-blue-600/15 text-blue-700 dark:text-blue-300 border border-blue-200/80 dark:border-blue-500/30 font-semibold">
                 {language}
               </span>
               {data?.partOfSpeech && (
-                <span className="text-[11px] text-slate-500 italic">{data.partOfSpeech}</span>
+                <span className="text-[11px] text-slate-500 dark:text-slate-400 italic">{data.partOfSpeech}</span>
               )}
             </div>
           </div>
 
           <button
             onClick={onClose}
-            className="w-7 h-7 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-100 flex items-center justify-center text-sm font-semibold transition-colors"
+            className="w-7 h-7 rounded-lg text-slate-400 dark:text-slate-500 hover:text-slate-600 dark:hover:text-slate-300 hover:bg-slate-100 dark:hover:bg-white/[0.06] flex items-center justify-center text-sm font-semibold transition-colors"
           >
             ✕
           </button>
@@ -126,28 +126,28 @@ export default function WordLookupModal({
         {loading ? (
           <div className="py-6 text-center space-y-2">
             <div className="w-5 h-5 border-2 border-blue-600/30 border-t-blue-600 rounded-full animate-spin mx-auto" />
-            <p className="text-xs text-slate-400 font-medium">Looking up definition...</p>
+            <p className="text-xs text-slate-400 dark:text-slate-500 font-medium">Looking up definition...</p>
           </div>
         ) : error ? (
-          <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-700 space-y-1">
+          <div className="p-3 bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-900 rounded-xl text-xs text-rose-700 dark:text-rose-300 space-y-1">
             <p className="font-semibold">⚠️ Lookup error</p>
             <p>{error}</p>
           </div>
         ) : data ? (
           <div className="space-y-3">
-            <div className="p-3.5 bg-slate-50 border border-slate-200/80 rounded-xl space-y-1">
-              <div className="text-[10px] uppercase font-mono tracking-wider text-slate-400 font-semibold">
+            <div className="p-3.5 bg-slate-50 dark:bg-[#090d16] border border-slate-200/80 dark:border-white/[0.08] rounded-xl space-y-1">
+              <div className="text-[10px] uppercase font-mono tracking-wider text-slate-400 dark:text-slate-500 font-semibold">
                 Translation
               </div>
-              <div className="text-base font-bold text-slate-900">{data.translation}</div>
+              <div className="text-base font-bold text-slate-900 dark:text-white">{data.translation}</div>
               {data.explanation && (
-                <p className="text-xs text-slate-600 pt-1 leading-relaxed">{data.explanation}</p>
+                <p className="text-xs text-slate-600 dark:text-slate-300 pt-1 leading-relaxed">{data.explanation}</p>
               )}
             </div>
 
             {contextSentence && (
-              <div className="text-xs text-slate-500 bg-slate-50/50 p-2.5 rounded-lg border border-slate-100 italic">
-                "{contextSentence}"
+              <div className="text-xs text-slate-500 dark:text-slate-400 bg-slate-50/50 dark:bg-[#090d16]/60 p-2.5 rounded-lg border border-slate-100 dark:border-white/[0.06] italic">
+                &quot;{contextSentence}&quot;
               </div>
             )}
           </div>
@@ -159,7 +159,7 @@ export default function WordLookupModal({
             <button
               type="button"
               onClick={() => onPlayAudio(cleanWord)}
-              className="px-3 py-2 rounded-xl bg-slate-100 hover:bg-slate-200/80 border border-slate-200 text-xs font-semibold text-slate-700 transition-colors flex items-center gap-1.5"
+              className="px-3 py-2 rounded-xl bg-slate-100 dark:bg-white/[0.06] hover:bg-slate-200/80 dark:hover:bg-white/[0.1] border border-slate-200/80 dark:border-white/[0.08] text-xs font-semibold text-slate-700 dark:text-slate-300 transition-colors flex items-center gap-1.5"
             >
               <span>🔊</span>
               <span>Pronounce</span>
@@ -173,8 +173,8 @@ export default function WordLookupModal({
               disabled={isSaved || loading || !data}
               className={`px-4 py-2 rounded-xl text-xs font-semibold transition-all flex items-center gap-1.5 shadow-xs ${
                 isSaved
-                  ? 'bg-emerald-50 text-emerald-800 border border-emerald-300 font-semibold cursor-default'
-                  : 'bg-blue-600 hover:bg-blue-700 text-white shadow-blue-500/20 active:scale-[0.98]'
+                  ? 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-800 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-800 font-semibold cursor-default'
+                  : 'bg-blue-600 hover:bg-blue-500 text-white shadow-blue-500/25 active:scale-[0.98]'
               }`}
             >
               <span>{isSaved ? '✓' : '⭐'}</span>

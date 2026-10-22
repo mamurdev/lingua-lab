@@ -7,6 +7,53 @@ const supabaseAdmin = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_PUBLISHABLE_KEY
 );
 
+const inMemoryQuotaStore = new Map();
+
+function getUtcDateString(d = new Date()) {
+  return d.toISOString().split("T")[0];
+}
+
+function enforceInMemoryQuota(userId, kind, dayLimit = 60, minuteLimit = 6) {
+  const now = new Date();
+  const today = getUtcDateString(now);
+  const currentMinute = Math.floor(now.getTime() / 60000);
+  const storeKey = `${userId}:${kind}`;
+
+  let record = inMemoryQuotaStore.get(storeKey);
+  if (!record) {
+    record = { day: today, dayCount: 0, minuteWindow: currentMinute, minuteCount: 0 };
+    inMemoryQuotaStore.set(storeKey, record);
+  }
+
+  if (record.day !== today) {
+    record.day = today;
+    record.dayCount = 0;
+  }
+
+  if (record.minuteWindow !== currentMinute) {
+    record.minuteWindow = currentMinute;
+    record.minuteCount = 0;
+  }
+
+  if (record.dayCount >= dayLimit) {
+    return {
+      allowed: false,
+      reason: `Daily limit reached (${dayLimit} ${kind.toUpperCase()} requests/day). Resets at 00:00 UTC.`,
+    };
+  }
+
+  if (record.minuteCount >= minuteLimit) {
+    return {
+      allowed: false,
+      reason: `Rate limit exceeded (${minuteLimit} requests/min). Please wait a few moments.`,
+    };
+  }
+
+  record.dayCount += 1;
+  record.minuteCount += 1;
+  return { allowed: true };
+}
+
 async function enforceQuota(userId, kind, dayLimit = 60, minuteLimit = 6) {
   if (!userId) return { allowed: true };
   try {
@@ -16,13 +63,15 @@ async function enforceQuota(userId, kind, dayLimit = 60, minuteLimit = 6) {
       p_day_limit: dayLimit,
       p_minute_limit: minuteLimit,
     });
-    if (error) return { allowed: true };
-    const row = data && data[0];
-    if (row && !row.allowed) return { allowed: false, reason: row.reason };
-    return { allowed: true };
+    if (!error && data && data.length > 0) {
+      const row = data[0];
+      if (!row.allowed) return { allowed: false, reason: row.reason || "Quota limit reached" };
+      return { allowed: true };
+    }
   } catch {
-    return { allowed: true };
+    // fallback
   }
+  return enforceInMemoryQuota(userId, kind, dayLimit, minuteLimit);
 }
 
 // Robust helper to save chat turns: tries atomic RPC first, falls back to direct table inserts
@@ -148,6 +197,63 @@ Return strictly valid standard JSON:
   return { hasMistake: false };
 }
 
+// Feature 3: Evaluate immersion scenario mission objectives
+async function evaluateScenarioObjectives(genAIInstance, scenario, userMessage, assistantReply, language = "English") {
+  if (!scenario || !Array.isArray(scenario.objectives)) return { completedIds: [] };
+
+  const uncompleted = scenario.objectives.filter((o) => !o.completed);
+  if (uncompleted.length === 0) {
+    return { completedIds: [], allCompleted: true };
+  }
+
+  const prompt = `You are an immersion scenario evaluator for a language learning app.
+Scenario: "${scenario.title}"
+Setting: ${scenario.setting || "Real-world immersion"}
+Target Language: ${language}
+
+Uncompleted Objectives:
+${uncompleted.map((o) => `[ID: "${o.id}"] Goal: ${o.text}`).join("\n")}
+
+Latest Dialogue Turn:
+Learner: "${(userMessage || '').replace(/"/g, '\\"')}"
+AI Partner: "${(assistantReply || '').replace(/"/g, '\\"')}"
+
+Check if the learner's message in this turn successfully achieved ANY of the uncompleted objectives in ${language}.
+Be fair and encouraging: if the communicative intent clearly satisfies the objective goal in ${language}, count it as achieved!
+
+Return strictly valid JSON:
+{
+  "completedIds": ["<id>"],
+  "feedback": "<Optional short 1-sentence encouraging note if an objective was met, or null>"
+}`;
+
+  const models = ["gemini-3.5-flash-lite", "gemini-3.5-flash", "gemini-3.8-flash"];
+  for (const m of models) {
+    try {
+      const model = genAIInstance.getGenerativeModel({
+        model: m,
+        generationConfig: { responseMimeType: "application/json" },
+      });
+      const res = await model.generateContent(prompt);
+      const raw = res.response.text();
+      let parsed;
+      try {
+        parsed = JSON.parse(raw);
+      } catch {
+        parsed = JSON.parse(raw.replace(/\\'/g, "'"));
+      }
+      return {
+        completedIds: Array.isArray(parsed.completedIds) ? parsed.completedIds : [],
+        feedback: parsed.feedback || null,
+      };
+    } catch (err) {
+      console.warn(`[Scenario Eval Vercel] Model ${m} warning:`, err.message);
+    }
+  }
+
+  return { completedIds: [] };
+}
+
 export default async function handler(req, res) {
   if (req.method !== "POST") {
     return res.status(405).json({ error: "Method not allowed" });
@@ -178,6 +284,7 @@ export default async function handler(req, res) {
       level = "Beginner",
       conversationHistory = [],
       conversationId,
+      scenario,
     } = req.body;
 
     if (!message || !conversationId) {
@@ -202,6 +309,22 @@ export default async function handler(req, res) {
       parts: [{ text: msg.content }],
     }));
 
+    // Feature 3: Dynamic persona & immersion instructions
+    let systemInstruction = `You are a helpful language tutor. The user is practicing ${language} at a ${level} level. Respond naturally in ${language}. Correct them gently if needed. Limit response to under 120 words.`;
+    if (scenario && scenario.title) {
+      const objectivesList = Array.isArray(scenario.objectives)
+        ? scenario.objectives.map((o) => `- ${o.text}`).join("\n")
+        : "";
+      systemInstruction = `You are roleplaying as ${scenario.aiRole || "a conversational partner"} in an immersion scenario: "${scenario.title}".
+Setting: ${scenario.setting || "Real-world conversational context"}.
+The user is ${scenario.userRole || "a language learner"}.
+Stay in character! Respond naturally, authentically, and warmly in ${language} calibrated for a ${level} level.
+Keep replies conversational and concise (under 100 words) so the learner has ample turns to speak.
+Respond in character to naturally allow the user to achieve their mission objectives:
+${objectivesList}
+Do not break character or list the objectives explicitly; roleplay authentically in ${language}.`;
+    }
+
     const wantsStream = req.body.stream !== false;
     let handled = false;
     let lastModelError = null;
@@ -210,7 +333,7 @@ export default async function handler(req, res) {
       try {
         const model = genAI.getGenerativeModel({
           model: modelName,
-          systemInstruction: `You are a helpful language tutor. The user is practicing ${language} at a ${level} level. Respond naturally in ${language}. Correct them gently if needed. Limit response to under 120 words.`,
+          systemInstruction,
         });
 
         const chat = model.startChat({ history });
@@ -237,14 +360,21 @@ export default async function handler(req, res) {
           // Save conversation turn using robust helper
           const { userMsgId, assistantMsgId } = await saveChatTurn(conversationId, message, fullReply);
 
-          let grammarFeedback = null;
-          try {
-            grammarFeedback = await analyzeGrammar(genAI, message, language, level);
-          } catch (gErr) {
-            console.warn("[Grammar Vercel] Warning:", gErr.message);
-          }
+          // Parallel analysis: Grammar check + Feature 3 Scenario Objective Evaluation
+          const [grammarFeedback, scenarioEvaluation] = await Promise.all([
+            analyzeGrammar(genAI, message, language, level).catch((gErr) => {
+              console.warn("[Grammar Vercel] Warning:", gErr.message);
+              return null;
+            }),
+            scenario
+              ? evaluateScenarioObjectives(genAI, scenario, message, fullReply, language).catch((sErr) => {
+                  console.warn("[Scenario Eval Vercel] Warning:", sErr.message);
+                  return null;
+                })
+              : Promise.resolve(null),
+          ]);
 
-          res.write(`data: ${JSON.stringify({ done: true, reply: fullReply, assistantMsgId, userMsgId, grammarFeedback })}\n\n`);
+          res.write(`data: ${JSON.stringify({ done: true, reply: fullReply, assistantMsgId, userMsgId, grammarFeedback, scenarioEvaluation })}\n\n`);
           res.end();
           handled = true;
           break;
@@ -255,14 +385,21 @@ export default async function handler(req, res) {
           // Save conversation turn using robust helper
           const { userMsgId, assistantMsgId } = await saveChatTurn(conversationId, message, reply);
 
-          let grammarFeedback = null;
-          try {
-            grammarFeedback = await analyzeGrammar(genAI, message, language, level);
-          } catch (gErr) {
-            console.warn("[Grammar Vercel] Warning:", gErr.message);
-          }
+          // Parallel analysis: Grammar check + Feature 3 Scenario Objective Evaluation
+          const [grammarFeedback, scenarioEvaluation] = await Promise.all([
+            analyzeGrammar(genAI, message, language, level).catch((gErr) => {
+              console.warn("[Grammar Vercel] Warning:", gErr.message);
+              return null;
+            }),
+            scenario
+              ? evaluateScenarioObjectives(genAI, scenario, message, reply, language).catch((sErr) => {
+                  console.warn("[Scenario Eval Vercel] Warning:", sErr.message);
+                  return null;
+                })
+              : Promise.resolve(null),
+          ]);
 
-          res.json({ reply, assistantMsgId, userMsgId, grammarFeedback });
+          res.json({ reply, assistantMsgId, userMsgId, grammarFeedback, scenarioEvaluation });
           handled = true;
           break;
         }

@@ -22,9 +22,80 @@ const supabaseAdmin = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_PUBLISHABLE_KEY
 );
 
-// Milestone 5.1: Quota and Rate Limiting Helper
+// Milestone 5.1: Durable Quota and Rate Limiting System
+// Tracks daily and per-minute usage per user for 'ai' (chat + quiz shared) and 'voice'
+// Resets daily at 00:00 UTC and per rolling 60-second window.
+const inMemoryQuotaStore = new Map(); // key: `${userId}:${kind}` -> { day: 'YYYY-MM-DD', dayCount, minuteWindow: number, minuteCount }
+
+function getUtcDateString(d = new Date()) {
+  return d.toISOString().split("T")[0];
+}
+
+function enforceInMemoryQuota(userId, kind, dayLimit = 60, minuteLimit = 6) {
+  const now = new Date();
+  const today = getUtcDateString(now);
+  const currentMinute = Math.floor(now.getTime() / 60000);
+  const storeKey = `${userId}:${kind}`;
+
+  let record = inMemoryQuotaStore.get(storeKey);
+  if (!record) {
+    record = { day: today, dayCount: 0, minuteWindow: currentMinute, minuteCount: 0 };
+    inMemoryQuotaStore.set(storeKey, record);
+  }
+
+  // Check UTC day rollover
+  if (record.day !== today) {
+    record.day = today;
+    record.dayCount = 0;
+  }
+
+  // Check rolling minute rollover
+  if (record.minuteWindow !== currentMinute) {
+    record.minuteWindow = currentMinute;
+    record.minuteCount = 0;
+  }
+
+  // Check daily limit
+  if (record.dayCount >= dayLimit) {
+    return {
+      allowed: false,
+      reason: `Daily limit reached (${dayLimit} ${kind.toUpperCase()} requests/day). Resets at 00:00 UTC.`,
+      currentDayCount: record.dayCount,
+      dayLimit,
+      currentMinuteCount: record.minuteCount,
+      minuteLimit,
+    };
+  }
+
+  // Check per-minute rate limit
+  if (record.minuteCount >= minuteLimit) {
+    return {
+      allowed: false,
+      reason: `Rate limit exceeded (${minuteLimit} requests/min). Please wait a few moments.`,
+      currentDayCount: record.dayCount,
+      dayLimit,
+      currentMinuteCount: record.minuteCount,
+      minuteLimit,
+    };
+  }
+
+  // Increment counters
+  record.dayCount += 1;
+  record.minuteCount += 1;
+
+  return {
+    allowed: true,
+    currentDayCount: record.dayCount,
+    dayLimit,
+    currentMinuteCount: record.minuteCount,
+    minuteLimit,
+  };
+}
+
 async function enforceQuota(userId, kind, dayLimit = 60, minuteLimit = 6) {
   if (!userId) return { allowed: true };
+
+  // 1. Try Supabase atomic RPC first
   try {
     const { data, error } = await supabaseAdmin.rpc("check_and_consume_quota", {
       p_user_id: userId,
@@ -33,22 +104,111 @@ async function enforceQuota(userId, kind, dayLimit = 60, minuteLimit = 6) {
       p_minute_limit: minuteLimit,
     });
 
-    if (error) {
-      console.warn(`[Quota] Quota RPC check skipped (${error.message})`);
-      return { allowed: true };
+    if (!error && data && data.length > 0) {
+      const row = data[0];
+      if (!row.allowed) {
+        return { 
+          allowed: false, 
+          reason: row.reason || `Daily quota limit reached for ${kind}. Resets at 00:00 UTC.` 
+        };
+      }
+      return { allowed: true, currentDayCount: row.current_day_count, currentMinuteCount: row.current_minute_count };
     }
-
-    const row = data && data[0];
-    if (row && !row.allowed) {
-      return { allowed: false, reason: row.reason };
-    }
-
-    return { allowed: true };
-  } catch (err) {
-    console.warn("[Quota] Quota check exception:", err);
-    return { allowed: true };
+  } catch {
+    // Falls through to in-memory quota engine
   }
+
+  // 2. Active in-memory fallback (ensures durable enforcement across process runtime even before database migration is applied)
+  return enforceInMemoryQuota(userId, kind, dayLimit, minuteLimit);
 }
+
+function getQuotaStatus(userId, kind, dayLimit = 60, minuteLimit = 6) {
+  const now = new Date();
+  const today = getUtcDateString(now);
+  const currentMinute = Math.floor(now.getTime() / 60000);
+  const storeKey = `${userId}:${kind}`;
+
+  const record = inMemoryQuotaStore.get(storeKey) || { day: today, dayCount: 0, minuteWindow: currentMinute, minuteCount: 0 };
+  const effectiveDayCount = record.day === today ? record.dayCount : 0;
+  const effectiveMinuteCount = record.minuteWindow === currentMinute ? record.minuteCount : 0;
+
+  return {
+    kind,
+    usedToday: effectiveDayCount,
+    dayLimit,
+    remainingToday: Math.max(0, dayLimit - effectiveDayCount),
+    usedThisMinute: effectiveMinuteCount,
+    minuteLimit,
+    resetsAt: "00:00 UTC",
+  };
+}
+
+// Milestone 5.1: Quota inspection endpoint
+app.get("/api/usage", async (req, res) => {
+  const token = req.headers.authorization?.replace("Bearer ", "");
+  if (!token) {
+    return res.status(401).json({ error: "Authentication required" });
+  }
+
+  let userId;
+  try {
+    const { data: { user }, error } = await supabaseAdmin.auth.getUser(token);
+    if (error || !user) {
+      return res.status(401).json({ error: "Invalid or expired token" });
+    }
+    userId = user.id;
+  } catch {
+    return res.status(401).json({ error: "Failed to verify session" });
+  }
+
+  let dbUsage = null;
+  try {
+    const today = getUtcDateString();
+    const { data, error } = await supabaseAdmin
+      .from("usage_limits")
+      .select("kind, day_count, minute_count, window_date")
+      .eq("user_id", userId)
+      .eq("window_date", today);
+    if (!error && data) {
+      dbUsage = data;
+    }
+  } catch {
+    // fallback
+  }
+
+  let aiUsed = 0;
+  let voiceUsed = 0;
+
+  if (dbUsage && dbUsage.length > 0) {
+    const aiRow = dbUsage.find((r) => r.kind === "ai");
+    const voiceRow = dbUsage.find((r) => r.kind === "voice");
+    if (aiRow) aiUsed = aiRow.day_count;
+    if (voiceRow) voiceUsed = voiceRow.day_count;
+  } else {
+    const aiStatus = getQuotaStatus(userId, "ai", 60, 6);
+    const voiceStatus = getQuotaStatus(userId, "voice", 30, 6);
+    aiUsed = aiStatus.usedToday;
+    voiceUsed = voiceStatus.usedToday;
+  }
+
+  res.json({
+    ai: {
+      used: aiUsed,
+      limit: 60,
+      remaining: Math.max(0, 60 - aiUsed),
+      description: "Tutor turns and review quizzes (shared pool)",
+    },
+    voice: {
+      used: voiceUsed,
+      limit: 30,
+      remaining: Math.max(0, 30 - voiceUsed),
+      description: "Voice speech audio replays",
+    },
+    rateLimitPerMinute: 6,
+    resetsAt: "00:00 UTC",
+    serverUtcTime: new Date().toISOString(),
+  });
+});
 
 // Milestone 5.2: In-process concurrency lock per user
 // Prevents the same user from firing multiple AI requests simultaneously
@@ -203,6 +363,63 @@ Return strictly valid standard JSON:
   return { hasMistake: false };
 }
 
+// Feature 3: Evaluate immersion scenario mission objectives
+async function evaluateScenarioObjectives(genAIInstance, scenario, userMessage, assistantReply, language = "English") {
+  if (!scenario || !Array.isArray(scenario.objectives)) return { completedIds: [] };
+
+  const uncompleted = scenario.objectives.filter((o) => !o.completed);
+  if (uncompleted.length === 0) {
+    return { completedIds: [], allCompleted: true };
+  }
+
+  const prompt = `You are an immersion scenario evaluator for a language learning app.
+Scenario: "${scenario.title}"
+Setting: ${scenario.setting || "Real-world immersion"}
+Target Language: ${language}
+
+Uncompleted Objectives:
+${uncompleted.map((o) => `[ID: "${o.id}"] Goal: ${o.text}`).join("\n")}
+
+Latest Dialogue Turn:
+Learner: "${(userMessage || '').replace(/"/g, '\\"')}"
+AI Partner: "${(assistantReply || '').replace(/"/g, '\\"')}"
+
+Check if the learner's message in this turn successfully achieved ANY of the uncompleted objectives in ${language}.
+Be fair and encouraging: if the communicative intent clearly satisfies the objective goal in ${language}, count it as achieved!
+
+Return strictly valid JSON:
+{
+  "completedIds": ["<id>"],
+  "feedback": "<Optional short 1-sentence encouraging note if an objective was met, or null>"
+}`;
+
+  const models = ["gemini-3.5-flash-lite", "gemini-3.5-flash", "gemini-3.8-flash"];
+  for (const m of models) {
+    try {
+      const model = genAIInstance.getGenerativeModel({
+        model: m,
+        generationConfig: { responseMimeType: "application/json" },
+      });
+      const res = await model.generateContent(prompt);
+      const raw = res.response.text();
+      let parsed;
+      try {
+        parsed = JSON.parse(raw);
+      } catch {
+        parsed = JSON.parse(raw.replace(/\\'/g, "'"));
+      }
+      return {
+        completedIds: Array.isArray(parsed.completedIds) ? parsed.completedIds : [],
+        feedback: parsed.feedback || null,
+      };
+    } catch (err) {
+      console.warn(`[Scenario Eval] Model ${m} warning:`, err.message);
+    }
+  }
+
+  return { completedIds: [] };
+}
+
 // Milestone 2, 5.1 & 5.2: Chat generation with quota + concurrency checking
 app.post("/api/chat", async (req, res) => {
   try {
@@ -231,6 +448,7 @@ app.post("/api/chat", async (req, res) => {
       level = "Beginner",
       conversationHistory = [],
       conversationId,
+      scenario,
     } = req.body;
 
     if (!message || !conversationId) {
@@ -262,6 +480,22 @@ app.post("/api/chat", async (req, res) => {
         parts: [{ text: msg.content }],
       }));
 
+      // Feature 3: Dynamic persona & immersion instructions
+      let systemInstruction = `You are a helpful language tutor. The user is practicing ${language} at a ${level} level. Respond naturally in ${language}. Correct them gently if needed. Limit response to under 120 words.`;
+      if (scenario && scenario.title) {
+        const objectivesList = Array.isArray(scenario.objectives)
+          ? scenario.objectives.map((o) => `- ${o.text}`).join("\n")
+          : "";
+        systemInstruction = `You are roleplaying as ${scenario.aiRole || "a conversational partner"} in an immersion scenario: "${scenario.title}".
+Setting: ${scenario.setting || "Real-world conversational context"}.
+The user is ${scenario.userRole || "a language learner"}.
+Stay in character! Respond naturally, authentically, and warmly in ${language} calibrated for a ${level} level.
+Keep replies conversational and concise (under 100 words) so the learner has ample turns to speak.
+Respond in character to naturally allow the user to achieve their mission objectives:
+${objectivesList}
+Do not break character or list the objectives explicitly; roleplay authentically in ${language}.`;
+      }
+
       const wantsStream = req.body.stream !== false;
       let lastModelError = null;
       let handled = false;
@@ -270,7 +504,7 @@ app.post("/api/chat", async (req, res) => {
         try {
           const model = genAI.getGenerativeModel({
             model: modelName,
-            systemInstruction: `You are a helpful language tutor. The user is practicing ${language} at a ${level} level. Respond naturally in ${language}. Correct them gently if needed. Limit response to under 120 words.`,
+            systemInstruction,
           });
 
           const chat = model.startChat({ history });
@@ -297,15 +531,21 @@ app.post("/api/chat", async (req, res) => {
             // Save conversation turn using robust helper
             const { userMsgId, assistantMsgId } = await saveChatTurn(conversationId, message, fullReply);
 
-            // Feature 1: Analyze user message grammar
-            let grammarFeedback = null;
-            try {
-              grammarFeedback = await analyzeGrammar(genAI, message, language, level);
-            } catch (gErr) {
-              console.warn("[Grammar] Non-fatal analysis warning:", gErr.message);
-            }
+            // Parallel analysis: Grammar check + Feature 3 Scenario Objective Evaluation
+            const [grammarFeedback, scenarioEvaluation] = await Promise.all([
+              analyzeGrammar(genAI, message, language, level).catch((gErr) => {
+                console.warn("[Grammar] Non-fatal analysis warning:", gErr.message);
+                return null;
+              }),
+              scenario
+                ? evaluateScenarioObjectives(genAI, scenario, message, fullReply, language).catch((sErr) => {
+                    console.warn("[Scenario Eval] Non-fatal warning:", sErr.message);
+                    return null;
+                  })
+                : Promise.resolve(null),
+            ]);
 
-            res.write(`data: ${JSON.stringify({ done: true, reply: fullReply, assistantMsgId, userMsgId, grammarFeedback })}\n\n`);
+            res.write(`data: ${JSON.stringify({ done: true, reply: fullReply, assistantMsgId, userMsgId, grammarFeedback, scenarioEvaluation })}\n\n`);
             res.end();
             handled = true;
             break;
@@ -316,15 +556,21 @@ app.post("/api/chat", async (req, res) => {
             // Save conversation turn using robust helper
             const { userMsgId, assistantMsgId } = await saveChatTurn(conversationId, message, reply);
 
-            // Feature 1: Analyze user message grammar
-            let grammarFeedback = null;
-            try {
-              grammarFeedback = await analyzeGrammar(genAI, message, language, level);
-            } catch (gErr) {
-              console.warn("[Grammar] Non-fatal analysis warning:", gErr.message);
-            }
+            // Parallel analysis: Grammar check + Feature 3 Scenario Objective Evaluation
+            const [grammarFeedback, scenarioEvaluation] = await Promise.all([
+              analyzeGrammar(genAI, message, language, level).catch((gErr) => {
+                console.warn("[Grammar] Non-fatal analysis warning:", gErr.message);
+                return null;
+              }),
+              scenario
+                ? evaluateScenarioObjectives(genAI, scenario, message, reply, language).catch((sErr) => {
+                    console.warn("[Scenario Eval] Non-fatal warning:", sErr.message);
+                    return null;
+                  })
+                : Promise.resolve(null),
+            ]);
 
-            res.json({ reply, assistantMsgId, userMsgId, grammarFeedback });
+            res.json({ reply, assistantMsgId, userMsgId, grammarFeedback, scenarioEvaluation });
             handled = true;
             break;
           }
@@ -754,6 +1000,22 @@ app.post("/api/grammar/analyze", async (req, res) => {
   } catch (error) {
     console.error("[Grammar] Error in /api/grammar/analyze:", error);
     res.status(500).json({ error: error instanceof Error ? error.message : "Failed to analyze grammar" });
+  }
+});
+
+// Feature 3: Standalone Scenario Objective Evaluation endpoint
+app.post("/api/scenario/evaluate", async (req, res) => {
+  try {
+    const { scenario, userMessage, assistantReply, language = "English" } = req.body;
+    if (!scenario || !userMessage) {
+      return res.status(400).json({ error: "Missing scenario or userMessage for evaluation" });
+    }
+
+    const evaluation = await evaluateScenarioObjectives(genAI, scenario, userMessage, assistantReply || "", language);
+    res.json({ evaluation });
+  } catch (error) {
+    console.error("[Scenario] Error in /api/scenario/evaluate:", error);
+    res.status(500).json({ error: error instanceof Error ? error.message : "Failed to evaluate scenario" });
   }
 });
 
