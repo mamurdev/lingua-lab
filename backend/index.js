@@ -11,6 +11,10 @@ const app = express();
 app.use(cors({ origin: ["http://localhost:5173", "http://localhost:3000"] }));
 app.use(express.json({ limit: "1mb" }));
 
+app.get("/api/health", (req, res) => {
+  res.json({ status: "ok", service: "lingua-lab-api", timestamp: new Date().toISOString() });
+});
+
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
 const supabaseAdmin = createClient(
@@ -73,6 +77,76 @@ function releaseLock(userId, key) {
   }
 }
 
+// Robust helper to save chat turns: tries atomic RPC first, falls back to direct table inserts
+async function saveChatTurn(conversationId, userContent, assistantContent) {
+  try {
+    const { data: savedTurn, error: saveError } = await supabaseAdmin.rpc("save_chat_turn", {
+      p_conversation_id: conversationId,
+      p_user_content: userContent,
+      p_assistant_content: assistantContent,
+    });
+
+    if (!saveError && savedTurn && savedTurn.length > 0) {
+      return {
+        userMsgId: savedTurn[0].user_msg_id,
+        assistantMsgId: savedTurn[0].assistant_msg_id,
+      };
+    }
+    if (saveError) {
+      console.warn(`[Chat] save_chat_turn RPC notice (${saveError.message}), using direct insert fallback.`);
+    }
+  } catch (rpcErr) {
+    console.warn("[Chat] save_chat_turn RPC exception, using direct insert fallback:", rpcErr);
+  }
+
+  // Direct table insert fallback
+  const { data: lastMsg } = await supabaseAdmin
+    .from("messages")
+    .select("sequence")
+    .eq("conversation_id", conversationId)
+    .order("sequence", { ascending: false })
+    .limit(1);
+
+  const nextSeq = (lastMsg && lastMsg.length > 0 && typeof lastMsg[0].sequence === "number" ? lastMsg[0].sequence : 0) + 1;
+
+  const { data: inserted, error: insertError } = await supabaseAdmin
+    .from("messages")
+    .insert([
+      {
+        conversation_id: conversationId,
+        role: "user",
+        content: userContent,
+        sequence: nextSeq,
+      },
+      {
+        conversation_id: conversationId,
+        role: "assistant",
+        content: assistantContent,
+        sequence: nextSeq + 1,
+      },
+    ])
+    .select();
+
+  if (insertError || !inserted || inserted.length < 2) {
+    console.error("[Chat] Direct insert error:", insertError);
+    throw new Error(insertError?.message || "Failed to persist chat messages to database");
+  }
+
+  try {
+    await supabaseAdmin
+      .from("conversations")
+      .update({ updated_at: new Date().toISOString() })
+      .eq("id", conversationId);
+  } catch {
+    // Non-fatal if column doesn't exist
+  }
+
+  return {
+    userMsgId: inserted[0].id,
+    assistantMsgId: inserted[1].id,
+  };
+}
+
 // Milestone 2, 5.1 & 5.2: Chat generation with quota + concurrency checking
 app.post("/api/chat", async (req, res) => {
   try {
@@ -126,39 +200,86 @@ app.post("/api/chat", async (req, res) => {
     }
 
     try {
-      const model = genAI.getGenerativeModel({
-        model: "gemini-3.1-flash-lite",
-        systemInstruction: `You are a helpful language tutor. The user is practicing ${language} at a ${level} level. Respond naturally in ${language}. Correct them gently if needed. Limit response to under 120 words.`,
-      });
-
+      const models = ["gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.8-flash"];
       const history = conversationHistory.map((msg) => ({
         role: msg.role === "assistant" ? "model" : "user",
         parts: [{ text: msg.content }],
       }));
 
-      const chat = model.startChat({ history });
-      const result = await chat.sendMessage(message);
-      const reply = result.response.text();
+      const wantsStream = req.body.stream !== false;
+      let lastModelError = null;
+      let handled = false;
 
-      // Atomically save both messages via the RPC
-      const { data: savedTurn, error: saveError } = await supabaseAdmin.rpc("save_chat_turn", {
-        p_conversation_id: conversationId,
-        p_user_content: message,
-        p_assistant_content: reply,
-      });
+      for (const modelName of models) {
+        try {
+          const model = genAI.getGenerativeModel({
+            model: modelName,
+            systemInstruction: `You are a helpful language tutor. The user is practicing ${language} at a ${level} level. Respond naturally in ${language}. Correct them gently if needed. Limit response to under 120 words.`,
+          });
 
-      if (saveError || !savedTurn || savedTurn.length === 0) {
-        console.error("[Chat] Failed to save turn:", saveError);
-        return res.status(503).json({ error: "Failed to save conversation turn" });
+          const chat = model.startChat({ history });
+
+          if (wantsStream) {
+            if (!res.headersSent) {
+              res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
+              res.setHeader("Cache-Control", "no-cache, no-transform");
+              res.setHeader("Connection", "keep-alive");
+              if (typeof res.flushHeaders === "function") res.flushHeaders();
+            }
+
+            const resultStream = await chat.sendMessageStream(message);
+            let fullReply = "";
+
+            for await (const chunk of resultStream.stream) {
+              const chunkText = chunk.text();
+              if (chunkText) {
+                fullReply += chunkText;
+                res.write(`data: ${JSON.stringify({ chunk: chunkText })}\n\n`);
+              }
+            }
+
+            // Save conversation turn using robust helper
+            const { userMsgId, assistantMsgId } = await saveChatTurn(conversationId, message, fullReply);
+
+            res.write(`data: ${JSON.stringify({ done: true, reply: fullReply, assistantMsgId, userMsgId })}\n\n`);
+            res.end();
+            handled = true;
+            break;
+          } else {
+            const result = await chat.sendMessage(message);
+            const reply = result.response.text();
+
+            // Save conversation turn using robust helper
+            const { userMsgId, assistantMsgId } = await saveChatTurn(conversationId, message, reply);
+
+            res.json({ reply, assistantMsgId, userMsgId });
+            handled = true;
+            break;
+          }
+        } catch (mErr) {
+          console.warn(`[Chat] Model ${modelName} failed (${mErr.message}), trying next model...`);
+          lastModelError = mErr;
+          // If headers were already sent with chunk data, we cannot retry another stream
+          if (res.headersSent) {
+            break;
+          }
+        }
       }
 
-      res.json({ reply });
+      if (!handled && lastModelError) {
+        throw lastModelError;
+      }
     } finally {
       releaseLock(userId, lockKey);
     }
   } catch (error) {
     console.error("Chat error:", error);
-    res.status(500).json({ error: "Failed to process chat with Gemini" });
+    if (res.headersSent) {
+      res.write(`data: ${JSON.stringify({ error: error.message || "Failed to process chat with Gemini" })}\n\n`);
+      res.end();
+    } else {
+      res.status(500).json({ error: error.message || "Failed to process chat with Gemini" });
+    }
   }
 });
 
@@ -392,14 +513,30 @@ STRICT REQUIREMENTS:
 3. answerIndex must be an integer between 0 and 3.
 4. Test words or grammar actually used in the transcript.`;
 
-    const model = genAI.getGenerativeModel({
-      model: "gemini-3.1-flash-lite",
-      generationConfig: {
-        responseMimeType: "application/json",
-      },
-    });
+    const models = ["gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.8-flash"];
+    let result = null;
+    let lastError = null;
 
-    const result = await model.generateContent(prompt);
+    for (const m of models) {
+      try {
+        const model = genAI.getGenerativeModel({
+          model: m,
+          generationConfig: {
+            responseMimeType: "application/json",
+          },
+        });
+        result = await model.generateContent(prompt);
+        if (result && result.response) break;
+      } catch (err) {
+        console.warn(`[Quiz] Model ${m} error (${err.message}), trying next...`);
+        lastError = err;
+      }
+    }
+
+    if (!result) {
+      throw lastError || new Error("Failed to generate quiz with all AI models");
+    }
+
     const textOutput = result.response.text();
     let parsedQuiz;
 
@@ -458,6 +595,77 @@ STRICT REQUIREMENTS:
   } catch (error) {
     console.error("[Quiz] Error in /api/exercises:", error);
     res.status(500).json({ error: error instanceof Error ? error.message : "Failed to generate exercises" });
+  }
+});
+
+// Feature 2: 1-Click Vocabulary Lookup
+app.post("/api/vocabulary/lookup", async (req, res) => {
+  try {
+    const { word, context, language = "English" } = req.body;
+    if (!word || typeof word !== "string" || !word.trim()) {
+      return res.status(400).json({ error: "Missing word for vocabulary lookup" });
+    }
+
+    const cleanWord = word.trim().replace(/[.,!?;:"'()[\]{}«»¡¿]/g, "");
+    if (!cleanWord) {
+      return res.status(400).json({ error: "Invalid word" });
+    }
+
+    const prompt = `You are an expert polyglot language tutor.
+Analyze the target word "${cleanWord}" in the language ${language}${context ? ` within the context sentence: "${context}"` : ""}.
+Provide a concise translation into English and grammatical details.
+
+Return ONLY a JSON object with these exact keys:
+{
+  "word": "${cleanWord}",
+  "translation": "<English translation of the word in this context>",
+  "partOfSpeech": "<e.g. noun (masculine), verb (infinitive), adjective, adverb>",
+  "phonetic": "<IPA phonetic transcription if available, e.g. /aˈmi.ɣo/>",
+  "explanation": "<Brief definition or usage tip in under 20 words>"
+}`;
+
+    const models = ["gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.8-flash"];
+    let result = null;
+    let lastError = null;
+
+    for (const m of models) {
+      try {
+        const model = genAI.getGenerativeModel({
+          model: m,
+          generationConfig: { responseMimeType: "application/json" },
+        });
+        result = await model.generateContent(prompt);
+        if (result && result.response) break;
+      } catch (err) {
+        console.warn(`[Vocab] Model ${m} error (${err.message}), trying next...`);
+        lastError = err;
+      }
+    }
+
+    if (!result) {
+      throw lastError || new Error("Failed to lookup vocabulary with AI models");
+    }
+
+    const textOutput = result.response.text();
+    let data;
+    try {
+      data = JSON.parse(textOutput);
+    } catch {
+      return res.status(502).json({ error: "Malformed JSON response from AI" });
+    }
+
+    res.json({
+      word: data.word || cleanWord,
+      translation: data.translation || "Translation unavailable",
+      partOfSpeech: data.partOfSpeech || "word",
+      phonetic: data.phonetic || "",
+      explanation: data.explanation || "",
+      context: context || "",
+      language,
+    });
+  } catch (error) {
+    console.error("[Vocab] Error in /api/vocabulary/lookup:", error);
+    res.status(500).json({ error: error instanceof Error ? error.message : "Failed to lookup vocabulary" });
   }
 });
 

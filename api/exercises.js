@@ -115,14 +115,30 @@ STRICT REQUIREMENTS:
 3. answerIndex must be an integer between 0 and 3.
 4. Test words or grammar actually used in the transcript.`;
 
-    const model = genAI.getGenerativeModel({
-      model: "gemini-3.1-flash-lite",
-      generationConfig: {
-        responseMimeType: "application/json",
-      },
-    });
+    const models = ["gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.8-flash"];
+    let result = null;
+    let lastError = null;
 
-    const result = await model.generateContent(prompt);
+    for (const m of models) {
+      try {
+        const model = genAI.getGenerativeModel({
+          model: m,
+          generationConfig: {
+            responseMimeType: "application/json",
+          },
+        });
+        result = await model.generateContent(prompt);
+        if (result && result.response) break;
+      } catch (err) {
+        console.warn(`[Quiz Vercel] Model ${m} failed (${err.message}), trying next...`);
+        lastError = err;
+      }
+    }
+
+    if (!result) {
+      throw lastError || new Error("Failed to generate quiz with AI models");
+    }
+
     const textOutput = result.response.text();
     let parsedQuiz;
 
