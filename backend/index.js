@@ -147,6 +147,62 @@ async function saveChatTurn(conversationId, userContent, assistantContent) {
   };
 }
 
+// Feature 1: Grammar and Syntax Mistake Analyzer
+async function analyzeGrammar(genAIInstance, text, language = "English", level = "Beginner") {
+  if (!text || text.trim().length < 2) {
+    return { hasMistake: false };
+  }
+
+  const prompt = `You are an expert language grammar analyzer and pedagogue.
+The user is practicing ${language} at a ${level} level.
+User message: "${text.replace(/"/g, '\\"')}".
+
+Analyze if this message contains any grammatical mistakes, incorrect verb conjugations, wrong gender/number agreements, unnatural phrasing, or spelling mistakes in ${language}.
+Ignore minor punctuation casing differences.
+
+If there ARE mistakes:
+Return strictly valid standard JSON (do not escape single quotes):
+{
+  "hasMistake": true,
+  "corrected": "<The fully corrected, natural sentence in ${language}>",
+  "explanation": "<Concise explanation of the mistakes and how to fix them, in English, under 45 words>",
+  "diff": [
+    {
+      "original": "<the exact mistaken word or phrase>",
+      "corrected": "<the corrected word or phrase>",
+      "rule": "<short rule explanation, e.g. Preterite 1st person singular of 'ir'>"
+    }
+  ]
+}
+
+If the sentence is grammatically correct and natural:
+Return strictly valid standard JSON:
+{
+  "hasMistake": false
+}`;
+
+  const models = ["gemini-3.5-flash-lite", "gemini-3.5-flash", "gemini-3.8-flash"];
+  for (const m of models) {
+    try {
+      const model = genAIInstance.getGenerativeModel({
+        model: m,
+        generationConfig: { responseMimeType: "application/json" },
+      });
+      const res = await model.generateContent(prompt);
+      const raw = res.response.text();
+      try {
+        return JSON.parse(raw);
+      } catch {
+        return JSON.parse(raw.replace(/\\'/g, "'"));
+      }
+    } catch (err) {
+      console.warn(`[Grammar] Model ${m} analysis warning:`, err.message);
+    }
+  }
+
+  return { hasMistake: false };
+}
+
 // Milestone 2, 5.1 & 5.2: Chat generation with quota + concurrency checking
 app.post("/api/chat", async (req, res) => {
   try {
@@ -241,7 +297,15 @@ app.post("/api/chat", async (req, res) => {
             // Save conversation turn using robust helper
             const { userMsgId, assistantMsgId } = await saveChatTurn(conversationId, message, fullReply);
 
-            res.write(`data: ${JSON.stringify({ done: true, reply: fullReply, assistantMsgId, userMsgId })}\n\n`);
+            // Feature 1: Analyze user message grammar
+            let grammarFeedback = null;
+            try {
+              grammarFeedback = await analyzeGrammar(genAI, message, language, level);
+            } catch (gErr) {
+              console.warn("[Grammar] Non-fatal analysis warning:", gErr.message);
+            }
+
+            res.write(`data: ${JSON.stringify({ done: true, reply: fullReply, assistantMsgId, userMsgId, grammarFeedback })}\n\n`);
             res.end();
             handled = true;
             break;
@@ -252,7 +316,15 @@ app.post("/api/chat", async (req, res) => {
             // Save conversation turn using robust helper
             const { userMsgId, assistantMsgId } = await saveChatTurn(conversationId, message, reply);
 
-            res.json({ reply, assistantMsgId, userMsgId });
+            // Feature 1: Analyze user message grammar
+            let grammarFeedback = null;
+            try {
+              grammarFeedback = await analyzeGrammar(genAI, message, language, level);
+            } catch (gErr) {
+              console.warn("[Grammar] Non-fatal analysis warning:", gErr.message);
+            }
+
+            res.json({ reply, assistantMsgId, userMsgId, grammarFeedback });
             handled = true;
             break;
           }
@@ -666,6 +738,22 @@ Return ONLY a JSON object with these exact keys:
   } catch (error) {
     console.error("[Vocab] Error in /api/vocabulary/lookup:", error);
     res.status(500).json({ error: error instanceof Error ? error.message : "Failed to lookup vocabulary" });
+  }
+});
+
+// Feature 1: Standalone Grammar Analysis endpoint
+app.post("/api/grammar/analyze", async (req, res) => {
+  try {
+    const { message, language = "English", level = "Beginner" } = req.body;
+    if (!message || typeof message !== "string" || !message.trim()) {
+      return res.status(400).json({ error: "Missing message text for grammar analysis" });
+    }
+
+    const feedback = await analyzeGrammar(genAI, message.trim(), language, level);
+    res.json({ feedback });
+  } catch (error) {
+    console.error("[Grammar] Error in /api/grammar/analyze:", error);
+    res.status(500).json({ error: error instanceof Error ? error.message : "Failed to analyze grammar" });
   }
 });
 

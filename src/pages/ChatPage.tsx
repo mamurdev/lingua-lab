@@ -3,6 +3,7 @@ import { useParams, Link } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
 import WordLookupModal from '../components/WordLookupModal';
 import VocabularyDeckView from '../components/VocabularyDeckView';
+import GrammarFeedbackCard, { type GrammarFeedback } from '../components/GrammarFeedbackCard';
 import { getStoredVocabulary, type VocabularyItem } from '../lib/vocabulary';
 
 type Message = { id: string; role: 'user' | 'assistant'; content: string; sequence: number; };
@@ -87,6 +88,18 @@ export default function ChatPage() {
   const [lookupWord, setLookupWord] = useState<string | null>(null);
   const [lookupContext, setLookupContext] = useState<string | undefined>(undefined);
   const [lastFailedMessage, setLastFailedMessage] = useState<string | null>(null);
+
+  // Feature 1: Grammar and Syntax Feedback state
+  const [grammarFeedbackMap, setGrammarFeedbackMap] = useState<Record<string, GrammarFeedback>>(() => {
+    if (!id || typeof window === 'undefined') return {};
+    try {
+      const stored = localStorage.getItem(`lingua_grammar_${id}`);
+      return stored ? JSON.parse(stored) : {};
+    } catch {
+      return {};
+    }
+  });
+  const [analyzingGrammarId, setAnalyzingGrammarId] = useState<string | null>(null);
 
   // Audio state (Milestone 3)
   const [audioUrls, setAudioUrls] = useState<Record<string, string>>({});
@@ -265,6 +278,41 @@ export default function ChatPage() {
     setInput(msg);
   };
 
+  const checkGrammar = async (msg: Message) => {
+    if (analyzingGrammarId) return;
+    setAnalyzingGrammarId(msg.id);
+    try {
+      const response = await fetch('/api/grammar/analyze', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          message: msg.content,
+          language: convDetails?.language || 'English',
+          level: convDetails?.level || 'Beginner',
+        }),
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        if (data.feedback) {
+          setGrammarFeedbackMap((prev) => {
+            const updated = { ...prev, [msg.id]: data.feedback };
+            try {
+              if (id) localStorage.setItem(`lingua_grammar_${id}`, JSON.stringify(updated));
+            } catch {
+              /* ignore storage write error */
+            }
+            return updated;
+          });
+        }
+      }
+    } catch (err) {
+      console.warn('Grammar check error:', err);
+    } finally {
+      setAnalyzingGrammarId(null);
+    }
+  };
+
   useEffect(() => {
     const fetchInitialData = async () => {
       // 1. Fetch conversation details for the AI prompt context
@@ -286,6 +334,18 @@ export default function ChatPage() {
         .eq('conversation_id', id)
         .order('created_at', { ascending: false });
       if (exData) setExercises(exData);
+
+      // 4. Fetch saved grammar feedback
+      try {
+        const stored = localStorage.getItem(`lingua_grammar_${id}`);
+        if (stored) {
+          setGrammarFeedbackMap(JSON.parse(stored));
+        } else {
+          setGrammarFeedbackMap({});
+        }
+      } catch {
+        /* ignore storage read error */
+      }
     };
 
     if (id) fetchInitialData();
@@ -396,6 +456,18 @@ export default function ChatPage() {
                 if (data.done) {
                   if (data.assistantMsgId) finalAssistantId = data.assistantMsgId;
                   if (data.userMsgId) finalUserId = data.userMsgId;
+                  if (data.grammarFeedback) {
+                    const fb = data.grammarFeedback;
+                    setGrammarFeedbackMap((prev) => {
+                      const updated = { ...prev, [finalUserId]: fb };
+                      try {
+                        if (id) localStorage.setItem(`lingua_grammar_${id}`, JSON.stringify(updated));
+                      } catch {
+                        /* ignore storage write error */
+                      }
+                      return updated;
+                    });
+                  }
                 }
               } catch (parseErr: unknown) {
                 if (parseErr instanceof Error && !parseErr.message.includes('JSON')) {
@@ -716,14 +788,37 @@ export default function ChatPage() {
             ) : (
               messages.map((msg) => (
                 <div key={msg.id} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                  <div
-                    className={`max-w-[85%] sm:max-w-[78%] p-4 rounded-2xl text-sm leading-relaxed shadow-sm ${
-                      msg.role === 'user'
-                        ? 'bg-blue-600 text-white rounded-br-sm shadow-blue-500/10'
-                        : 'bg-white border border-slate-200/90 text-slate-800 rounded-bl-sm space-y-2.5'
-                    }`}
-                  >
-                    {msg.role === 'assistant' && (
+                  {msg.role === 'user' ? (
+                    <div className="flex flex-col items-end max-w-[85%] sm:max-w-[78%] space-y-1">
+                      <div className="p-4 rounded-2xl text-sm leading-relaxed shadow-sm bg-blue-600 text-white rounded-br-sm shadow-blue-500/10">
+                        {msg.content}
+                      </div>
+
+                      {/* Feature 1: Grammar Feedback */}
+                      {grammarFeedbackMap[msg.id] ? (
+                        <GrammarFeedbackCard originalText={msg.content} feedback={grammarFeedbackMap[msg.id]} />
+                      ) : (
+                        msg.id !== streamingMessageId && (
+                          <button
+                            type="button"
+                            onClick={() => checkGrammar(msg)}
+                            disabled={analyzingGrammarId === msg.id}
+                            className="text-[10px] font-semibold text-slate-400 hover:text-slate-600 transition-colors flex items-center gap-1 opacity-70 hover:opacity-100 pr-1"
+                          >
+                            {analyzingGrammarId === msg.id ? (
+                              <>
+                                <span className="w-2.5 h-2.5 border border-slate-400 border-t-slate-600 rounded-full animate-spin" />
+                                <span>Checking grammar...</span>
+                              </>
+                            ) : (
+                              <span>🔍 Check grammar</span>
+                            )}
+                          </button>
+                        )
+                      )}
+                    </div>
+                  ) : (
+                    <div className="max-w-[85%] sm:max-w-[78%] p-4 rounded-2xl text-sm leading-relaxed shadow-sm bg-white border border-slate-200/90 text-slate-800 rounded-bl-sm space-y-2.5">
                       <div className="flex items-center justify-between gap-2 text-[10px] font-mono uppercase tracking-wider text-slate-400">
                         <div className="flex items-center gap-1.5">
                           <span className="w-1.5 h-1.5 rounded-full bg-blue-500"></span>
@@ -733,89 +828,89 @@ export default function ChatPage() {
                           💡 Click any word to translate & save
                         </span>
                       </div>
-                    )}
 
-                    <div className="whitespace-pre-wrap leading-relaxed">
-                      {msg.role === 'assistant' && msg.id !== streamingMessageId
-                        ? renderInteractiveTutorText(msg.content)
-                        : msg.content}
-                      {msg.id === streamingMessageId && msg.content && (
-                        <span className="inline-block w-1.5 h-4 ml-1 bg-blue-600 animate-pulse align-middle" />
-                      )}
-                      {msg.id === streamingMessageId && !msg.content && (
-                        <span className="flex items-center gap-1.5 text-slate-400 py-1 text-xs">
-                          <span className="w-1.5 h-1.5 rounded-full bg-blue-600 animate-bounce"></span>
-                          <span className="w-1.5 h-1.5 rounded-full bg-blue-600 animate-bounce [animation-delay:0.2s]"></span>
-                          <span className="w-1.5 h-1.5 rounded-full bg-blue-600 animate-bounce [animation-delay:0.4s]"></span>
-                          <span className="text-xs text-slate-400 ml-1">Tutor is thinking...</span>
-                        </span>
-                      )}
-                    </div>
-
-                    {msg.role === 'assistant' && msg.id !== streamingMessageId && (
-                      <div className="pt-2 border-t border-slate-100 flex items-center justify-between flex-wrap gap-2">
-                        <div className="flex items-center gap-2">
-                          <button
-                            onClick={() => playAudio(msg)}
-                            disabled={audioLoadingId === msg.id}
-                            className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg transition-all ${
-                              playingAudioId === msg.id
-                                ? 'bg-blue-50 border border-blue-300 text-blue-700'
-                                : 'bg-slate-100 hover:bg-slate-200/80 border border-slate-200 text-slate-700 hover:text-slate-900'
-                            }`}
-                          >
-                            {audioLoadingId === msg.id ? (
-                              <>
-                                <span className="w-3 h-3 border-2 border-slate-400/30 border-t-slate-600 rounded-full animate-spin" />
-                                <span>Generating Voice...</span>
-                              </>
-                            ) : playingAudioId === msg.id ? (
-                              <>
-                                <span className="text-blue-600">⏸</span>
-                                <span>Pause Audio</span>
-                              </>
-                            ) : (
-                              <>
-                                <span className="text-slate-500">▶</span>
-                                <span>{audioUrls[msg.id] ? "Replay Audio" : "Listen (AI Voice)"}</span>
-                              </>
-                            )}
-                          </button>
-
-                          {/* Hidden audio element for clean native playback */}
-                          {audioUrls[msg.id] && (
-                            <audio
-                              ref={(el) => {
-                                audioRefs.current[msg.id] = el;
-                              }}
-                              src={audioUrls[msg.id]}
-                              autoPlay
-                              preload="auto"
-                              className="hidden"
-                              onPlay={() => {
-                                setPlayingAudioId(msg.id);
-                                Object.entries(audioRefs.current).forEach(([k, other]) => {
-                                  if (other && k !== msg.id) other.pause();
-                                });
-                              }}
-                              onPause={() => {
-                                setPlayingAudioId((curr) => (curr === msg.id ? null : curr));
-                              }}
-                              onEnded={() => {
-                                setPlayingAudioId((curr) => (curr === msg.id ? null : curr));
-                              }}
-                            />
-                          )}
-                        </div>
-
-                        {audioError[msg.id] && (
-                          <div className="text-[11px] text-rose-700 bg-rose-50 px-2.5 py-1 rounded-lg border border-rose-200 font-medium">
-                            ⚠️ {audioError[msg.id]}
-                          </div>
+                      <div className="whitespace-pre-wrap leading-relaxed">
+                        {msg.id !== streamingMessageId
+                          ? renderInteractiveTutorText(msg.content)
+                          : msg.content}
+                        {msg.id === streamingMessageId && msg.content && (
+                          <span className="inline-block w-1.5 h-4 ml-1 bg-blue-600 animate-pulse align-middle" />
+                        )}
+                        {msg.id === streamingMessageId && !msg.content && (
+                          <span className="flex items-center gap-1.5 text-slate-400 py-1 text-xs">
+                            <span className="w-1.5 h-1.5 rounded-full bg-blue-600 animate-bounce"></span>
+                            <span className="w-1.5 h-1.5 rounded-full bg-blue-600 animate-bounce [animation-delay:0.2s]"></span>
+                            <span className="w-1.5 h-1.5 rounded-full bg-blue-600 animate-bounce [animation-delay:0.4s]"></span>
+                            <span className="text-xs text-slate-400 ml-1">Tutor is thinking...</span>
+                          </span>
                         )}
                       </div>
-                    )}
-                  </div>
+
+                      {msg.id !== streamingMessageId && (
+                        <div className="pt-2 border-t border-slate-100 flex items-center justify-between flex-wrap gap-2">
+                          <div className="flex items-center gap-2">
+                            <button
+                              onClick={() => playAudio(msg)}
+                              disabled={audioLoadingId === msg.id}
+                              className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg transition-all ${
+                                playingAudioId === msg.id
+                                  ? 'bg-blue-50 border border-blue-300 text-blue-700'
+                                  : 'bg-slate-100 hover:bg-slate-200/80 border border-slate-200 text-slate-700 hover:text-slate-900'
+                              }`}
+                            >
+                              {audioLoadingId === msg.id ? (
+                                <>
+                                  <span className="w-3 h-3 border-2 border-slate-400/30 border-t-slate-600 rounded-full animate-spin" />
+                                  <span>Generating Voice...</span>
+                                </>
+                              ) : playingAudioId === msg.id ? (
+                                <>
+                                  <span className="text-blue-600">⏸</span>
+                                  <span>Pause Audio</span>
+                                </>
+                              ) : (
+                                <>
+                                  <span className="text-slate-500">▶</span>
+                                  <span>{audioUrls[msg.id] ? "Replay Audio" : "Listen (AI Voice)"}</span>
+                                </>
+                              )}
+                            </button>
+
+                            {/* Hidden audio element for clean native playback */}
+                            {audioUrls[msg.id] && (
+                              <audio
+                                ref={(el) => {
+                                  audioRefs.current[msg.id] = el;
+                                }}
+                                src={audioUrls[msg.id]}
+                                autoPlay
+                                preload="auto"
+                                className="hidden"
+                                onPlay={() => {
+                                  setPlayingAudioId(msg.id);
+                                  Object.entries(audioRefs.current).forEach(([k, other]) => {
+                                    if (other && k !== msg.id) other.pause();
+                                  });
+                                }}
+                                onPause={() => {
+                                  setPlayingAudioId((curr) => (curr === msg.id ? null : curr));
+                                }}
+                                onEnded={() => {
+                                  setPlayingAudioId((curr) => (curr === msg.id ? null : curr));
+                                }}
+                              />
+                            )}
+                          </div>
+
+                          {audioError[msg.id] && (
+                            <div className="text-[11px] text-rose-700 bg-rose-50 px-2.5 py-1 rounded-lg border border-rose-200 font-medium">
+                              ⚠️ {audioError[msg.id]}
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
               ))
             )}
