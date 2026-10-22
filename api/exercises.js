@@ -2,89 +2,55 @@ import { GoogleGenerativeAI } from "@google/generative-ai";
 import { createClient } from "@supabase/supabase-js";
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-const supabaseAdmin = createClient(
-  process.env.SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_PUBLISHABLE_KEY
-);
 
-const inMemoryQuotaStore = new Map();
+const supabaseUrl = process.env.SUPABASE_URL;
+const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
-function getUtcDateString(d = new Date()) {
-  return d.toISOString().split("T")[0];
+if (!supabaseUrl || !supabaseServiceRoleKey) {
+  console.error("[Startup Error] Missing required SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY environment variables.");
 }
 
-function enforceInMemoryQuota(userId, kind, dayLimit = 60, minuteLimit = 6) {
-  const now = new Date();
-  const today = getUtcDateString(now);
-  const currentMinute = Math.floor(now.getTime() / 60000);
-  const storeKey = `${userId}:${kind}`;
-
-  let record = inMemoryQuotaStore.get(storeKey);
-  if (!record) {
-    record = { day: today, dayCount: 0, minuteWindow: currentMinute, minuteCount: 0 };
-    inMemoryQuotaStore.set(storeKey, record);
-  }
-
-  if (record.day !== today) {
-    record.day = today;
-    record.dayCount = 0;
-  }
-
-  if (record.minuteWindow !== currentMinute) {
-    record.minuteWindow = currentMinute;
-    record.minuteCount = 0;
-  }
-
-  if (record.dayCount >= dayLimit) {
-    return {
-      allowed: false,
-      reason: `Daily limit reached (${dayLimit} ${kind.toUpperCase()} requests/day). Resets at 00:00 UTC.`,
-    };
-  }
-
-  if (record.minuteCount >= minuteLimit) {
-    return {
-      allowed: false,
-      reason: `Rate limit exceeded (${minuteLimit} requests/min). Please wait a few moments.`,
-    };
-  }
-
-  record.dayCount += 1;
-  record.minuteCount += 1;
-  return { allowed: true };
-}
+const supabaseAdmin = (supabaseUrl && supabaseServiceRoleKey)
+  ? createClient(supabaseUrl, supabaseServiceRoleKey)
+  : null;
 
 async function enforceQuota(userId, kind, dayLimit = 60, minuteLimit = 6) {
-  if (!userId) return { allowed: true };
-  try {
-    const { data, error } = await supabaseAdmin.rpc("check_and_consume_quota", {
-      p_user_id: userId,
-      p_kind: kind,
-      p_day_limit: dayLimit,
-      p_minute_limit: minuteLimit,
-    });
-    if (!error && data && data.length > 0) {
-      const row = data[0];
-      if (!row.allowed) return { allowed: false, reason: row.reason || "Quota limit reached" };
-      return { allowed: true };
-    }
-  } catch {
-    // fallback
+  if (!userId) return { allowed: false, reason: "Authentication required" };
+  const { data, error } = await supabaseAdmin.rpc("check_and_consume_quota", {
+    p_user_id: userId,
+    p_kind: kind,
+    p_day_limit: dayLimit,
+    p_minute_limit: minuteLimit,
+  });
+
+  if (error) {
+    console.error(`[Quota RPC error (${kind})]:`, error);
+    throw new Error("Service temporarily unavailable");
   }
-  return enforceInMemoryQuota(userId, kind, dayLimit, minuteLimit);
+
+  if (data && data.length > 0) {
+    const row = data[0];
+    if (!row.allowed) return { allowed: false, reason: row.reason || "Quota limit reached" };
+    return { allowed: true };
+  }
+
+  throw new Error("Service temporarily unavailable");
 }
 
 export default async function handler(req, res) {
+  res.setHeader("Cache-Control", "no-store");
+
   if (req.method !== "POST") {
     return res.status(405).json({ error: "Method not allowed" });
   }
 
-  try {
-    const { conversationId } = req.body;
-    if (!conversationId) {
-      return res.status(400).json({ error: "Missing conversationId" });
-    }
+  if (!supabaseAdmin) {
+    console.error("[Startup Error] Supabase admin client not initialized: missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY");
+    return res.status(503).json({ error: "Service temporarily unavailable" });
+  }
 
+  try {
+    // 1. Auth
     const authHeader = req.headers.authorization;
     const token = authHeader ? authHeader.replace("Bearer ", "") : null;
 
@@ -98,34 +64,39 @@ export default async function handler(req, res) {
       return res.status(401).json({ error: "Authentication required" });
     }
 
-    const quota = await enforceQuota(userId, "ai", 60, 6);
-    if (!quota.allowed) {
-      return res.status(429).json({ error: quota.reason });
+    // 2. Input validation
+    const { conversationId } = req.body || {};
+    if (!conversationId || typeof conversationId !== "string") {
+      return res.status(400).json({ error: "Missing or invalid conversationId" });
     }
 
-    const client = token
-      ? createClient(process.env.SUPABASE_URL, process.env.SUPABASE_PUBLISHABLE_KEY, {
-          global: { headers: { Authorization: `Bearer ${token}` } },
-        })
-      : supabaseAdmin;
-
-    const { data: conv, error: convError } = await client
+    // 3. Ownership check
+    const { data: conv, error: convError } = await supabaseAdmin
       .from("conversations")
-      .select("*")
+      .select("id, user_id, language, level")
       .eq("id", conversationId)
+      .eq("user_id", userId)
       .single();
 
     if (convError || !conv) {
       return res.status(404).json({ error: "Conversation not found or access denied" });
     }
 
-    const { data: messages, error: msgError } = await client
+    // 4. Quota
+    const quota = await enforceQuota(userId, "ai", 60, 6);
+    if (!quota.allowed) {
+      return res.status(429).json({ error: quota.reason });
+    }
+
+    // 5. Provider call
+    const { data: messages, error: msgError } = await supabaseAdmin
       .from("messages")
       .select("role, content, sequence")
       .eq("conversation_id", conversationId)
       .order("sequence", { ascending: true });
 
     if (msgError || !messages) {
+      console.error("[Quiz] Messages fetch error:", msgError);
       return res.status(500).json({ error: "Failed to load conversation history" });
     }
 
@@ -185,7 +156,8 @@ STRICT REQUIREMENTS:
     }
 
     if (!result) {
-      throw lastError || new Error("Failed to generate quiz with AI models");
+      console.error("[Quiz] Gemini generation failed:", lastError);
+      return res.status(502).json({ error: "Failed to generate quiz. Please try again." });
     }
 
     const textOutput = result.response.text();
@@ -194,34 +166,36 @@ STRICT REQUIREMENTS:
     try {
       parsedQuiz = JSON.parse(textOutput);
     } catch {
-      return res.status(502).json({ error: "AI generated malformed JSON for quiz" });
+      console.error("[Quiz] Malformed JSON from AI:", textOutput);
+      return res.status(502).json({ error: "Failed to generate valid quiz format. Please try again." });
     }
 
     if (!parsedQuiz || !Array.isArray(parsedQuiz.questions) || parsedQuiz.questions.length !== 3) {
-      return res.status(502).json({ error: "Quiz must have exactly 3 questions" });
+      console.error("[Quiz] Invalid question count from AI:", parsedQuiz);
+      return res.status(502).json({ error: "Failed to generate valid quiz format. Please try again." });
     }
 
     for (let i = 0; i < parsedQuiz.questions.length; i++) {
       const q = parsedQuiz.questions[i];
       if (!q.prompt || typeof q.prompt !== "string" || q.prompt.trim().length === 0) {
-        return res.status(502).json({ error: `Question ${i + 1} has an empty prompt` });
+        return res.status(502).json({ error: "Failed to generate valid quiz format. Please try again." });
       }
       if (!Array.isArray(q.options) || q.options.length !== 4) {
-        return res.status(502).json({ error: `Question ${i + 1} must have exactly 4 options` });
+        return res.status(502).json({ error: "Failed to generate valid quiz format. Please try again." });
       }
       const uniqueOptions = new Set(q.options.map((o) => String(o).trim()));
       if (uniqueOptions.size !== 4) {
-        return res.status(502).json({ error: `Question ${i + 1} contains duplicate options` });
+        return res.status(502).json({ error: "Failed to generate valid quiz format. Please try again." });
       }
       if (typeof q.answerIndex !== "number" || q.answerIndex < 0 || q.answerIndex > 3 || !Number.isInteger(q.answerIndex)) {
-        return res.status(502).json({ error: `Question ${i + 1} has invalid answerIndex` });
+        return res.status(502).json({ error: "Failed to generate valid quiz format. Please try again." });
       }
       if (!q.explanation || typeof q.explanation !== "string" || q.explanation.trim().length === 0) {
-        return res.status(502).json({ error: `Question ${i + 1} is missing an explanation` });
+        return res.status(502).json({ error: "Failed to generate valid quiz format. Please try again." });
       }
     }
 
-    let saveResult = await supabaseAdmin
+    const { data: savedExercise, error: saveError } = await supabaseAdmin
       .from("exercises")
       .insert([
         {
@@ -232,14 +206,18 @@ STRICT REQUIREMENTS:
       .select()
       .single();
 
-    if (saveResult.error || !saveResult.data) {
-      return res.status(500).json({ error: "Failed to persist exercise to database" });
+    if (saveError || !savedExercise) {
+      console.error("[Quiz] Failed to persist exercise:", saveError);
+      return res.status(500).json({ error: "Failed to save quiz" });
     }
 
-    res.json({ exercise: saveResult.data });
+    res.json({ exercise: savedExercise });
   } catch (error) {
     console.error("[Quiz] Error in /api/exercises:", error);
-    res.status(500).json({ error: error instanceof Error ? error.message : "Failed to generate exercises" });
+    const status = error?.message === "Service temporarily unavailable" ? 503 : 500;
+    const genericMessage = error?.message === "Service temporarily unavailable"
+      ? "Service temporarily unavailable"
+      : "Failed to generate exercises";
+    res.status(status).json({ error: genericMessage });
   }
 }
-

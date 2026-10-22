@@ -2,275 +2,136 @@ import { GoogleGenerativeAI } from "@google/generative-ai";
 import { createClient } from "@supabase/supabase-js";
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-const supabaseAdmin = createClient(
-  process.env.SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_PUBLISHABLE_KEY
-);
 
-const inMemoryQuotaStore = new Map();
+const supabaseUrl = process.env.SUPABASE_URL;
+const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
-function getUtcDateString(d = new Date()) {
-  return d.toISOString().split("T")[0];
+if (!supabaseUrl || !supabaseServiceRoleKey) {
+  console.error("[Startup Error] Missing required SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY environment variables.");
 }
 
-function enforceInMemoryQuota(userId, kind, dayLimit = 60, minuteLimit = 6) {
-  const now = new Date();
-  const today = getUtcDateString(now);
-  const currentMinute = Math.floor(now.getTime() / 60000);
-  const storeKey = `${userId}:${kind}`;
-
-  let record = inMemoryQuotaStore.get(storeKey);
-  if (!record) {
-    record = { day: today, dayCount: 0, minuteWindow: currentMinute, minuteCount: 0 };
-    inMemoryQuotaStore.set(storeKey, record);
-  }
-
-  if (record.day !== today) {
-    record.day = today;
-    record.dayCount = 0;
-  }
-
-  if (record.minuteWindow !== currentMinute) {
-    record.minuteWindow = currentMinute;
-    record.minuteCount = 0;
-  }
-
-  if (record.dayCount >= dayLimit) {
-    return {
-      allowed: false,
-      reason: `Daily limit reached (${dayLimit} ${kind.toUpperCase()} requests/day). Resets at 00:00 UTC.`,
-    };
-  }
-
-  if (record.minuteCount >= minuteLimit) {
-    return {
-      allowed: false,
-      reason: `Rate limit exceeded (${minuteLimit} requests/min). Please wait a few moments.`,
-    };
-  }
-
-  record.dayCount += 1;
-  record.minuteCount += 1;
-  return { allowed: true };
-}
+const supabaseAdmin = (supabaseUrl && supabaseServiceRoleKey)
+  ? createClient(supabaseUrl, supabaseServiceRoleKey)
+  : null;
 
 async function enforceQuota(userId, kind, dayLimit = 60, minuteLimit = 6) {
-  if (!userId) return { allowed: true };
-  try {
-    const { data, error } = await supabaseAdmin.rpc("check_and_consume_quota", {
-      p_user_id: userId,
-      p_kind: kind,
-      p_day_limit: dayLimit,
-      p_minute_limit: minuteLimit,
-    });
-    if (!error && data && data.length > 0) {
-      const row = data[0];
-      if (!row.allowed) return { allowed: false, reason: row.reason || "Quota limit reached" };
-      return { allowed: true };
-    }
-  } catch {
-    // fallback
-  }
-  return enforceInMemoryQuota(userId, kind, dayLimit, minuteLimit);
-}
+  if (!userId) return { allowed: false, reason: "Authentication required" };
+  const { data, error } = await supabaseAdmin.rpc("check_and_consume_quota", {
+    p_user_id: userId,
+    p_kind: kind,
+    p_day_limit: dayLimit,
+    p_minute_limit: minuteLimit,
+  });
 
-// ==========================================
-// Milestone 5.2: Generation Leases & Session Turn Caps
-// ==========================================
-
-// In-memory lease store: conversationId -> { token, expiresAt, userId }
-const inMemoryLeaseStore = new Map();
-
-function acquireInMemoryLease(conversationId, userId, durationSeconds = 90) {
-  const now = Date.now();
-  const existing = inMemoryLeaseStore.get(conversationId);
-  if (existing && existing.expiresAt > now) {
-    return {
-      acquired: false,
-      reason: "A response is already being generated for this conversation. Please wait.",
-    };
+  if (error) {
+    console.error(`[Quota RPC error (${kind})]:`, error);
+    throw new Error("Service temporarily unavailable");
   }
 
-  const token = typeof crypto !== "undefined" && crypto.randomUUID
-    ? crypto.randomUUID()
-    : `lease_${Date.now()}_${Math.random().toString(36).substring(2, 10)}`;
-  const expiresAt = now + durationSeconds * 1000;
-
-  inMemoryLeaseStore.set(conversationId, { token, expiresAt, userId });
-  return { acquired: true, token };
-}
-
-function releaseInMemoryLease(conversationId, token) {
-  const existing = inMemoryLeaseStore.get(conversationId);
-  if (existing && existing.token === token) {
-    inMemoryLeaseStore.delete(conversationId);
-    return true;
+  if (data && data.length > 0) {
+    const row = data[0];
+    if (!row.allowed) return { allowed: false, reason: row.reason || "Quota limit reached" };
+    return { allowed: true };
   }
-  return false;
-}
 
-function validateInMemoryLease(conversationId, token) {
-  const now = Date.now();
-  const existing = inMemoryLeaseStore.get(conversationId);
-  if (!existing || existing.token !== token || existing.expiresAt <= now) {
-    return false;
-  }
-  return true;
+  throw new Error("Service temporarily unavailable");
 }
 
 async function acquireLease(conversationId, userId, durationSeconds = 90) {
-  try {
-    const { data, error } = await supabaseAdmin.rpc("acquire_conversation_lease", {
-      p_conversation_id: conversationId,
-      p_user_id: userId,
-      p_lease_duration_seconds: durationSeconds,
-    });
-    if (!error && data && data.length > 0) {
-      const res = data[0];
-      if (res.acquired) {
-        inMemoryLeaseStore.set(conversationId, {
-          token: res.lease_token,
-          expiresAt: Date.now() + durationSeconds * 1000,
-          userId,
-        });
-        return { acquired: true, token: res.lease_token };
-      }
-      return {
-        acquired: false,
-        code: res.error_code,
-        reason: res.error_message || "A response is already being generated for this conversation. Please wait.",
-      };
-    }
-  } catch {
-    // Fallback to in-memory store
+  const { data, error } = await supabaseAdmin.rpc("acquire_conversation_lease", {
+    p_conversation_id: conversationId,
+    p_user_id: userId,
+    p_lease_duration_seconds: durationSeconds,
+  });
+
+  if (error) {
+    console.error("[Acquire Lease RPC error]:", error);
+    return { acquired: false, code: "RPC_ERROR", reason: "Service temporarily unavailable" };
   }
-  return acquireInMemoryLease(conversationId, userId, durationSeconds);
+
+  if (data && data.length > 0) {
+    const res = data[0];
+    if (res.acquired) {
+      return { acquired: true, token: res.lease_token };
+    }
+    return {
+      acquired: false,
+      code: res.error_code,
+      reason: res.error_message || "A response is already being generated for this conversation.",
+    };
+  }
+
+  return { acquired: false, code: "UNKNOWN_ERROR", reason: "Service temporarily unavailable" };
 }
 
 async function releaseLease(conversationId, token) {
   if (!conversationId || !token) return;
-  releaseInMemoryLease(conversationId, token);
-  try {
-    await supabaseAdmin.rpc("release_conversation_lease", {
-      p_conversation_id: conversationId,
-      p_lease_token: token,
-    });
-  } catch {
-    // Non-fatal fallback
+  const { error } = await supabaseAdmin.rpc("release_conversation_lease", {
+    p_conversation_id: conversationId,
+    p_lease_token: token,
+  });
+  if (error) {
+    console.error("[Release Lease RPC error]:", error);
   }
 }
 
-// Robust helper to save chat turns: enforces unexpired lease token, checks turn cap, tries atomic RPC first, falls back to direct table inserts
 async function saveChatTurn(conversationId, leaseToken, userContent, assistantContent) {
-  // Validate lease token in-memory if lease exists
-  if (leaseToken && inMemoryLeaseStore.has(conversationId) && !validateInMemoryLease(conversationId, leaseToken)) {
-    throw new Error("Stale or expired generation lease token");
-  }
-
-  // 1. Try atomic RPC save_chat_turn_with_lease
+  let savedTurn;
+  let saveError;
   try {
-    const { data: savedTurn, error: saveError } = await supabaseAdmin.rpc("save_chat_turn_with_lease", {
+    const res = await supabaseAdmin.rpc("save_chat_turn_with_lease", {
       p_conversation_id: conversationId,
       p_lease_token: leaseToken,
       p_user_content: userContent,
       p_assistant_content: assistantContent,
     });
-
-    if (!saveError && savedTurn && savedTurn.length > 0) {
-      return {
-        userMsgId: savedTurn[0].user_msg_id,
-        assistantMsgId: savedTurn[0].assistant_msg_id,
-      };
-    }
-    if (saveError) {
-      // If Postgres explicitly raised lease or cap exception, propagate that
-      if (
-        saveError.message &&
-        !saveError.message.includes("schema cache") &&
-        (saveError.message.includes("Invalid, stale, or expired") || saveError.message.includes("Session limit reached"))
-      ) {
-        throw new Error(saveError.message);
-      }
-      console.warn(`[Chat] save_chat_turn_with_lease RPC notice (${saveError.message}), using fallback...`);
-    }
-  } catch (rpcErr) {
-    if (
-      rpcErr.message &&
-      !rpcErr.message.includes("schema cache") &&
-      (rpcErr.message.includes("Invalid, stale, or expired") || rpcErr.message.includes("Session limit reached"))
-    ) {
-      throw rpcErr;
-    }
+    savedTurn = res.data;
+    saveError = res.error;
+  } catch (err) {
+    err.isSaveError = true;
+    throw err;
   }
 
-  // 2. Try legacy save_chat_turn RPC
-  try {
-    const { data: savedTurn, error: saveError } = await supabaseAdmin.rpc("save_chat_turn", {
-      p_conversation_id: conversationId,
-      p_user_content: userContent,
-      p_assistant_content: assistantContent,
-    });
-
-    if (!saveError && savedTurn && savedTurn.length > 0) {
-      return {
-        userMsgId: savedTurn[0].user_msg_id,
-        assistantMsgId: savedTurn[0].assistant_msg_id,
-      };
-    }
-  } catch {
-    // Fallback to direct table insert below
-  }
-
-  // 2. Direct table insert fallback (with unexpired lease check)
-  if (leaseToken && inMemoryLeaseStore.has(conversationId) && !validateInMemoryLease(conversationId, leaseToken)) {
-    throw new Error("Stale or expired generation lease token");
-  }
-
-  const { data: lastMsg } = await supabaseAdmin
-    .from("messages")
-    .select("sequence")
-    .eq("conversation_id", conversationId)
-    .order("sequence", { ascending: false })
-    .limit(1);
-
-  const nextSeq = (lastMsg && lastMsg.length > 0 && typeof lastMsg[0].sequence === "number" ? lastMsg[0].sequence : 0) + 1;
-
-  const { data: inserted, error: insertError } = await supabaseAdmin
-    .from("messages")
-    .insert([
-      {
-        conversation_id: conversationId,
-        role: "user",
-        content: userContent,
-        sequence: nextSeq,
-      },
-      {
-        conversation_id: conversationId,
-        role: "assistant",
-        content: assistantContent,
-        sequence: nextSeq + 1,
-      },
-    ])
-    .select();
-
-  if (insertError || !inserted || inserted.length < 2) {
-    console.error("[Chat] Direct insert error:", insertError);
-    throw new Error(insertError?.message || "Failed to persist chat messages to database");
-  }
-
-  try {
-    await supabaseAdmin
-      .from("conversations")
-      .update({ updated_at: new Date().toISOString() })
-      .eq("id", conversationId);
-  } catch {
-    // Non-fatal if column doesn't exist
+  if (saveError || !savedTurn || savedTurn.length === 0) {
+    console.error("[Save Chat Turn RPC error]:", saveError);
+    const err = new Error(saveError?.message || "Failed to save chat turn");
+    err.isSaveError = true;
+    throw err;
   }
 
   return {
-    userMsgId: inserted[0].id,
-    assistantMsgId: inserted[1].id,
+    userMsgId: savedTurn[0].user_msg_id,
+    assistantMsgId: savedTurn[0].assistant_msg_id,
   };
+}
+
+function isValidScenario(scenario) {
+  if (scenario === undefined || scenario === null) return true;
+  if (typeof scenario !== "object" || Array.isArray(scenario)) return false;
+
+  if (typeof scenario.title !== "string" || scenario.title.trim().length === 0 || scenario.title.length > 100) {
+    return false;
+  }
+  if (scenario.aiRole !== undefined && (typeof scenario.aiRole !== "string" || scenario.aiRole.length > 200)) {
+    return false;
+  }
+  if (scenario.userRole !== undefined && (typeof scenario.userRole !== "string" || scenario.userRole.length > 200)) {
+    return false;
+  }
+  if (scenario.setting !== undefined && (typeof scenario.setting !== "string" || scenario.setting.length > 200)) {
+    return false;
+  }
+  if (scenario.objectives !== undefined) {
+    if (!Array.isArray(scenario.objectives) || scenario.objectives.length > 6) {
+      return false;
+    }
+    for (const obj of scenario.objectives) {
+      if (!obj || typeof obj !== "object") return false;
+      if (typeof obj.id !== "string" || obj.id.length > 40) return false;
+      if (typeof obj.text !== "string" || obj.text.length > 200) return false;
+    }
+  }
+  return true;
 }
 
 async function analyzeGrammar(genAIInstance, text, language = "English", level = "Beginner") {
@@ -326,7 +187,6 @@ Return strictly valid standard JSON:
   return { hasMistake: false };
 }
 
-// Feature 3: Evaluate immersion scenario mission objectives
 async function evaluateScenarioObjectives(genAIInstance, scenario, userMessage, assistantReply, language = "English") {
   if (!scenario || !Array.isArray(scenario.objectives)) return { completedIds: [] };
 
@@ -384,8 +244,15 @@ Return strictly valid JSON:
 }
 
 export default async function handler(req, res) {
+  res.setHeader("Cache-Control", "no-store");
+
   if (req.method !== "POST") {
     return res.status(405).json({ error: "Method not allowed" });
+  }
+
+  if (!supabaseAdmin) {
+    console.error("[Startup Error] Supabase admin client not initialized: missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY");
+    return res.status(503).json({ error: "Service temporarily unavailable" });
   }
 
   let leaseAcquired = false;
@@ -393,6 +260,7 @@ export default async function handler(req, res) {
   let activeConversationId = null;
 
   try {
+    // 1. Authenticate
     const authHeader = req.headers.authorization;
     const token = authHeader ? authHeader.replace("Bearer ", "") : null;
 
@@ -406,16 +274,13 @@ export default async function handler(req, res) {
       return res.status(401).json({ error: "Authentication required" });
     }
 
+    // 2. Validate input
     const {
       message,
-      language = "English",
-      level = "Beginner",
-      conversationHistory = [],
       conversationId,
       scenario,
-    } = req.body;
+    } = req.body || {};
 
-    // 1. Validate inputs (PRD lines 251, 324)
     if (!message || typeof message !== "string" || message.trim().length === 0) {
       return res.status(400).json({ error: "Message cannot be empty" });
     }
@@ -426,10 +291,14 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: "Missing or invalid conversationId" });
     }
 
-    // 2. Verify conversation ownership
+    if (scenario && !isValidScenario(scenario)) {
+      return res.status(400).json({ error: "Invalid scenario payload" });
+    }
+
+    // 3. Verify conversation ownership & select language / level from DB
     const { data: conv, error: convError } = await supabaseAdmin
       .from("conversations")
-      .select("id, user_id")
+      .select("id, user_id, language, level")
       .eq("id", conversationId)
       .eq("user_id", userId)
       .single();
@@ -438,52 +307,50 @@ export default async function handler(req, res) {
       return res.status(404).json({ error: "Conversation not found or access denied" });
     }
 
-    // 3. Cap sessions at 100 complete turns (PRD lines 277, 332, TODO 5.2)
-    try {
-      const { count, error: countErr } = await supabaseAdmin
-        .from("messages")
-        .select("id", { count: "exact", head: true })
-        .eq("conversation_id", conversationId)
-        .eq("role", "assistant");
+    const language = conv.language || "English";
+    const level = conv.level || "Beginner";
 
-      if (!countErr && typeof count === "number" && count >= 100) {
-        return res.status(400).json({
-          error: "Session limit reached (100 turns). Please start a new conversation to continue practicing.",
-        });
-      }
-    } catch (countEx) {
-      console.warn("[Chat Vercel] Turn count check exception (non-fatal):", countEx.message);
-    }
-
-    // 4. Milestone 5.2: Atomically acquire per-conversation generation lease (90s)
-    // NOTE: This happens BEFORE quota reservation to prevent consuming quota on 409 conflict
+    // 4. Acquire lease (atomic RPC)
     const lease = await acquireLease(conversationId, userId, 90);
     if (!lease.acquired) {
-      if (lease.code === "SESSION_COMPLETED") {
-        return res.status(400).json({ error: lease.reason });
+      if (lease.code === "NOT_FOUND") {
+        return res.status(404).json({ error: lease.reason || "Conversation not found" });
       }
-      return res.status(409).json({
-        error: lease.reason || "A response is already being generated for this conversation. Please wait.",
-      });
+      if (lease.code === "SESSION_COMPLETED") {
+        return res.status(400).json({ error: lease.reason || "Session limit reached (100 turns). Please start a new conversation." });
+      }
+      if (lease.code === "LEASE_BUSY") {
+        return res.status(409).json({ error: lease.reason || "A response is already being generated for this conversation." });
+      }
+      return res.status(503).json({ error: "Service temporarily unavailable" });
     }
 
     leaseAcquired = true;
     activeLeaseToken = lease.token;
     activeConversationId = conversationId;
 
-    // 5. Reserve quota AFTER lease acquisition and BEFORE provider call (PRD line 251, TODO 5.2)
-    const quota = await enforceQuota(userId, "ai", 60, 6);
-    if (!quota.allowed) {
-      await releaseLease(activeConversationId, activeLeaseToken);
-      leaseAcquired = false;
-      return res.status(429).json({ error: quota.reason });
-    }
-
+    // 5. Reserve quota & provider call inside try block so finally always releases lease
     try {
-      const models = ["gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.8-flash"];
-      // Bounded tutor context: retain latest 20 messages for relevant conversational memory (PRD 5.3)
-      const recentHistory = (Array.isArray(conversationHistory) ? conversationHistory : []).slice(-20);
-      const history = recentHistory.map((msg) => ({
+      const quota = await enforceQuota(userId, "ai", 60, 6);
+      if (!quota.allowed) {
+        return res.status(429).json({ error: quota.reason });
+      }
+
+      // Load last 20 messages from messages table ordered by sequence
+      const { data: dbMessages, error: msgError } = await supabaseAdmin
+        .from("messages")
+        .select("role, content, sequence")
+        .eq("conversation_id", conversationId)
+        .order("sequence", { ascending: false })
+        .limit(20);
+
+      if (msgError) {
+        console.error("[Messages fetch error]:", msgError);
+        throw new Error("Service temporarily unavailable");
+      }
+
+      const historyMessages = (dbMessages || []).reverse();
+      const history = historyMessages.map((msg) => ({
         role: msg.role === "assistant" ? "model" : "user",
         parts: [{ text: msg.content }],
       }));
@@ -504,6 +371,7 @@ ${objectivesList}
 Do not break character or list the objectives explicitly; roleplay authentically in ${language}.`;
       }
 
+      const models = ["gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.8-flash"];
       const wantsStream = req.body.stream !== false;
       let handled = false;
       let lastModelError = null;
@@ -536,7 +404,7 @@ Do not break character or list the objectives explicitly; roleplay authentically
               }
             }
 
-            // Save conversation turn atomically requiring active lease token
+            // 7. Save conversation turn using ONLY save_chat_turn_with_lease
             const { userMsgId, assistantMsgId } = await saveChatTurn(conversationId, activeLeaseToken, message, fullReply);
 
             // Parallel analysis: Grammar check + Feature 3 Scenario Objective Evaluation
@@ -561,7 +429,7 @@ Do not break character or list the objectives explicitly; roleplay authentically
             const result = await chat.sendMessage(message);
             const reply = result.response.text();
 
-            // Save conversation turn atomically requiring active lease token
+            // 7. Save conversation turn using ONLY save_chat_turn_with_lease
             const { userMsgId, assistantMsgId } = await saveChatTurn(conversationId, activeLeaseToken, message, reply);
 
             // Parallel analysis: Grammar check + Feature 3 Scenario Objective Evaluation
@@ -583,6 +451,9 @@ Do not break character or list the objectives explicitly; roleplay authentically
             break;
           }
         } catch (mErr) {
+          if (mErr.isSaveError) {
+            throw mErr;
+          }
           console.warn(`[Chat Vercel] Model ${modelName} failed (${mErr.message}), trying next...`);
           lastModelError = mErr;
           if (res.headersSent) break;
@@ -593,7 +464,7 @@ Do not break character or list the objectives explicitly; roleplay authentically
         throw lastModelError;
       }
     } finally {
-      // Milestone 5.2: Release the matching lease token in cleanup
+      // 8. Release lease in finally
       if (leaseAcquired && activeConversationId && activeLeaseToken) {
         await releaseLease(activeConversationId, activeLeaseToken);
         leaseAcquired = false;
@@ -601,11 +472,16 @@ Do not break character or list the objectives explicitly; roleplay authentically
     }
   } catch (error) {
     console.error("Chat error:", error);
+    const genericMessage = error?.message === "Service temporarily unavailable"
+      ? "Service temporarily unavailable"
+      : "Something went wrong. Please try again.";
+    const status = error?.message === "Service temporarily unavailable" ? 503 : 500;
+
     if (res.headersSent) {
-      res.write(`data: ${JSON.stringify({ error: error.message || "Failed to process chat with Gemini" })}\n\n`);
+      res.write(`data: ${JSON.stringify({ error: genericMessage })}\n\n`);
       res.end();
     } else {
-      res.status(500).json({ error: error.message || "Failed to process chat with Gemini" });
+      res.status(status).json({ error: genericMessage });
     }
   }
 }

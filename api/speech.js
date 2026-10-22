@@ -1,75 +1,37 @@
 import { createClient } from "@supabase/supabase-js";
 
-const supabaseAdmin = createClient(
-  process.env.SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_PUBLISHABLE_KEY
-);
+const supabaseUrl = process.env.SUPABASE_URL;
+const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
-const inMemoryQuotaStore = new Map();
-
-function getUtcDateString(d = new Date()) {
-  return d.toISOString().split("T")[0];
+if (!supabaseUrl || !supabaseServiceRoleKey) {
+  console.error("[Startup Error] Missing required SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY environment variables.");
 }
 
-function enforceInMemoryQuota(userId, kind, dayLimit = 30, minuteLimit = 6) {
-  const now = new Date();
-  const today = getUtcDateString(now);
-  const currentMinute = Math.floor(now.getTime() / 60000);
-  const storeKey = `${userId}:${kind}`;
-
-  let record = inMemoryQuotaStore.get(storeKey);
-  if (!record) {
-    record = { day: today, dayCount: 0, minuteWindow: currentMinute, minuteCount: 0 };
-    inMemoryQuotaStore.set(storeKey, record);
-  }
-
-  if (record.day !== today) {
-    record.day = today;
-    record.dayCount = 0;
-  }
-
-  if (record.minuteWindow !== currentMinute) {
-    record.minuteWindow = currentMinute;
-    record.minuteCount = 0;
-  }
-
-  if (record.dayCount >= dayLimit) {
-    return {
-      allowed: false,
-      reason: `Daily limit reached (${dayLimit} ${kind.toUpperCase()} requests/day). Resets at 00:00 UTC.`,
-    };
-  }
-
-  if (record.minuteCount >= minuteLimit) {
-    return {
-      allowed: false,
-      reason: `Rate limit exceeded (${minuteLimit} requests/min). Please wait a few moments.`,
-    };
-  }
-
-  record.dayCount += 1;
-  record.minuteCount += 1;
-  return { allowed: true };
-}
+const supabaseAdmin = (supabaseUrl && supabaseServiceRoleKey)
+  ? createClient(supabaseUrl, supabaseServiceRoleKey)
+  : null;
 
 async function enforceQuota(userId, kind, dayLimit = 30, minuteLimit = 6) {
-  if (!userId) return { allowed: true };
-  try {
-    const { data, error } = await supabaseAdmin.rpc("check_and_consume_quota", {
-      p_user_id: userId,
-      p_kind: kind,
-      p_day_limit: dayLimit,
-      p_minute_limit: minuteLimit,
-    });
-    if (!error && data && data.length > 0) {
-      const row = data[0];
-      if (!row.allowed) return { allowed: false, reason: row.reason || "Quota limit reached" };
-      return { allowed: true };
-    }
-  } catch {
-    // fallback
+  if (!userId) return { allowed: false, reason: "Authentication required" };
+  const { data, error } = await supabaseAdmin.rpc("check_and_consume_quota", {
+    p_user_id: userId,
+    p_kind: kind,
+    p_day_limit: dayLimit,
+    p_minute_limit: minuteLimit,
+  });
+
+  if (error) {
+    console.error(`[Quota RPC error (${kind})]:`, error);
+    throw new Error("Service temporarily unavailable");
   }
-  return enforceInMemoryQuota(userId, kind, dayLimit, minuteLimit);
+
+  if (data && data.length > 0) {
+    const row = data[0];
+    if (!row.allowed) return { allowed: false, reason: row.reason || "Quota limit reached" };
+    return { allowed: true };
+  }
+
+  throw new Error("Service temporarily unavailable");
 }
 
 async function synthesizeSpeech(text, preferredVoiceId, apiKey) {
@@ -120,14 +82,19 @@ async function synthesizeSpeech(text, preferredVoiceId, apiKey) {
 }
 
 export default async function handler(req, res) {
+  res.setHeader("Cache-Control", "no-store");
+
   if (req.method !== "POST") {
     return res.status(405).json({ error: "Method not allowed" });
   }
 
-  try {
-    const { messageId, text } = req.body;
-    let textToSpeech = (text || "").trim();
+  if (!supabaseAdmin) {
+    console.error("[Startup Error] Supabase admin client not initialized: missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY");
+    return res.status(503).json({ error: "Service temporarily unavailable" });
+  }
 
+  try {
+    // 1. Auth
     const authHeader = req.headers.authorization;
     const token = authHeader ? authHeader.replace("Bearer ", "") : null;
 
@@ -141,25 +108,34 @@ export default async function handler(req, res) {
       return res.status(401).json({ error: "Authentication required" });
     }
 
-    const quota = await enforceQuota(userId, "voice", 30, 6);
-    if (!quota.allowed) {
-      return res.status(429).json({ error: quota.reason });
+    // 2. Input validation
+    const { messageId, text } = req.body || {};
+    let textToSpeech = (text || "").trim();
+
+    if (!messageId && !textToSpeech) {
+      return res.status(400).json({ error: "Missing message text for speech synthesis" });
     }
 
+    // 3. Ownership check & assistant role validation
     if (messageId) {
-      const client = token
-        ? createClient(process.env.SUPABASE_URL, process.env.SUPABASE_PUBLISHABLE_KEY, {
-            global: { headers: { Authorization: `Bearer ${token}` } },
-          })
-        : supabaseAdmin;
-
-      const { data: messageData, error: msgError } = await client
+      const { data: messageData, error: msgError } = await supabaseAdmin
         .from("messages")
-        .select("content, role")
+        .select("content, role, conversation_id")
         .eq("id", messageId)
         .single();
 
       if (msgError || !messageData || messageData.role !== "assistant") {
+        return res.status(404).json({ error: "Assistant message not found or access denied" });
+      }
+
+      const { data: conv, error: convError } = await supabaseAdmin
+        .from("conversations")
+        .select("id")
+        .eq("id", messageData.conversation_id)
+        .eq("user_id", userId)
+        .single();
+
+      if (convError || !conv) {
         return res.status(404).json({ error: "Assistant message not found or access denied" });
       }
 
@@ -170,8 +146,16 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: "Missing message text for speech synthesis" });
     }
 
+    // 4. Quota
+    const quota = await enforceQuota(userId, "voice", 30, 6);
+    if (!quota.allowed) {
+      return res.status(429).json({ error: quota.reason });
+    }
+
+    // 5. Provider call
     if (!process.env.ELEVENLABS_API_KEY) {
-      return res.status(500).json({ error: "ELEVENLABS_API_KEY is not configured" });
+      console.error("[TTS] Missing ELEVENLABS_API_KEY");
+      return res.status(503).json({ error: "Service temporarily unavailable" });
     }
 
     const rawVoiceId = process.env.ELEVENLABS_VOICE_ID || "";
@@ -180,17 +164,18 @@ export default async function handler(req, res) {
     const result = await synthesizeSpeech(textToSpeech, preferredVoiceId, process.env.ELEVENLABS_API_KEY);
 
     if (!result.ok) {
-      return res.status(502).json({
-        error: `ElevenLabs API error (${result.error.status}): ${result.error.text}`,
-      });
+      console.error(`[TTS] ElevenLabs API error (${result.error?.status}):`, result.error?.text);
+      return res.status(502).json({ error: "Speech synthesis failed. Please try again." });
     }
 
     res.setHeader("Content-Type", "audio/mpeg");
-    res.setHeader("Cache-Control", "no-cache");
     res.send(Buffer.from(result.buffer));
   } catch (error) {
     console.error("[TTS] Speech Generation Error:", error);
-    res.status(500).json({ error: error instanceof Error ? error.message : "Failed to process speech request" });
+    const status = error?.message === "Service temporarily unavailable" ? 503 : 500;
+    const genericMessage = error?.message === "Service temporarily unavailable"
+      ? "Service temporarily unavailable"
+      : "Failed to process speech request";
+    res.status(status).json({ error: genericMessage });
   }
 }
-

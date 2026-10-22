@@ -835,47 +835,44 @@ export default function ChatPage() {
       )}
 
       {/* Top Header */}
-      <header className="px-4 sm:px-6 py-3 bg-white/80 dark:bg-[#07090e]/80 backdrop-blur-xl border-b border-slate-200/80 dark:border-white/[0.08] flex flex-wrap justify-between items-center gap-3 shrink-0 z-20 transition-colors duration-200">
-        <div className="flex items-center gap-3 sm:gap-4">
+      <header className="px-4 sm:px-6 py-2.5 bg-white/80 dark:bg-[#07090e]/80 backdrop-blur-xl border-b border-slate-200/80 dark:border-white/[0.08] flex flex-wrap justify-between items-center gap-3 shrink-0 z-20 transition-colors duration-200">
+        <div className="flex items-center gap-2.5 sm:gap-3.5 shrink-0 whitespace-nowrap">
           <Link
             to="/"
-            className="px-3 py-1.5 rounded-xl bg-slate-100 dark:bg-white/[0.06] hover:bg-slate-200/80 dark:hover:bg-white/[0.1] border border-slate-200/80 dark:border-white/[0.08] text-xs font-semibold text-slate-700 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-all flex items-center gap-1.5 shadow-xs"
+            className="px-3 py-1.5 rounded-xl bg-slate-100 dark:bg-white/[0.06] hover:bg-slate-200/80 dark:hover:bg-white/[0.1] border border-slate-200/80 dark:border-white/[0.08] text-xs font-semibold text-slate-700 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-all flex items-center gap-1.5 shadow-xs shrink-0 whitespace-nowrap"
           >
             <span>←</span>
             <span>Dashboard</span>
           </Link>
-          <div className="flex items-center gap-2">
-            <span className="text-xl">{getLanguageFlag(convDetails?.language)}</span>
-            <div>
-              <div className="flex items-center gap-2">
-                <h1 className="text-sm font-bold tracking-tight text-slate-900 dark:text-white">
-                  {convDetails?.language || 'Language'} Dialogue
-                </h1>
-                <span className="text-[10px] font-mono uppercase tracking-wider px-2 py-0.5 rounded-md bg-slate-100 dark:bg-white/[0.06] border border-slate-200/80 dark:border-white/[0.08] text-slate-600 dark:text-slate-300 font-medium">
-                  {convDetails?.level || 'Beginner'}
-                </span>
-              </div>
-              <div className="flex items-center gap-2 mt-0.5">
-                <p className="text-[11px] text-slate-400 dark:text-slate-500 font-mono">
-                  {messages.length} {messages.length === 1 ? 'message' : 'messages'}
-                </p>
-                <button
-                  type="button"
-                  onClick={() => setShowSessionInfo(true)}
-                  title="View Session Memory & Quota Architecture (Milestone 5.3)"
-                  className="px-1.5 py-0.5 rounded bg-indigo-50 dark:bg-indigo-500/10 hover:bg-indigo-100 dark:hover:bg-indigo-500/20 text-indigo-700 dark:text-indigo-300 border border-indigo-200/80 dark:border-indigo-500/25 text-[10px] font-medium transition-colors flex items-center gap-1 focus-visible:ring-2 focus-visible:ring-indigo-500"
-                  aria-label="View session memory and architecture details"
-                >
-                  <span>ℹ️</span>
-                  <span>Session Info</span>
-                </button>
-              </div>
-            </div>
+          <div className="flex items-center gap-2 sm:gap-2.5 whitespace-nowrap shrink-0">
+            <span className="text-lg leading-none shrink-0" aria-hidden="true">
+              {getLanguageFlag(convDetails?.language)}
+            </span>
+            <h1 className="text-sm font-bold tracking-tight text-slate-900 dark:text-white shrink-0">
+              {convDetails?.language || 'Language'} Dialogue
+            </h1>
+            <span className="text-[10px] font-mono uppercase tracking-wider px-2 py-0.5 rounded-md bg-slate-100 dark:bg-white/[0.06] border border-slate-200/80 dark:border-white/[0.08] text-slate-600 dark:text-slate-300 font-medium shrink-0">
+              {convDetails?.level || 'Beginner'}
+            </span>
+            <span className="text-slate-300 dark:text-slate-600 select-none text-xs shrink-0">•</span>
+            <span className="text-[11px] text-slate-400 dark:text-slate-500 font-mono shrink-0">
+              {messages.length} {messages.length === 1 ? 'message' : 'messages'}
+            </span>
+            <button
+              type="button"
+              onClick={() => setShowSessionInfo(true)}
+              title="View Session Memory & Quota Architecture (Milestone 5.3)"
+              className="px-2 py-0.5 rounded-md bg-indigo-50 dark:bg-indigo-500/10 hover:bg-indigo-100 dark:hover:bg-indigo-500/20 text-indigo-700 dark:text-indigo-300 border border-indigo-200/80 dark:border-indigo-500/25 text-[11px] font-medium transition-colors inline-flex items-center gap-1 shrink-0 whitespace-nowrap focus-visible:ring-2 focus-visible:ring-indigo-500"
+              aria-label="View session memory and architecture details"
+            >
+              <span className="leading-none">ℹ️</span>
+              <span className="leading-none">Session Info</span>
+            </button>
           </div>
         </div>
 
         {/* View Switcher, Theme Toggle & Quiz Action */}
-        <div className="flex items-center gap-2 sm:gap-2.5">
+        <div className="flex items-center gap-2 sm:gap-2.5 shrink-0 flex-wrap sm:flex-nowrap">
           <ThemeToggle />
 
           <div className="bg-slate-100 dark:bg-white/[0.05] p-1 rounded-xl border border-slate-200/80 dark:border-white/[0.08] flex items-center gap-1 text-xs">
