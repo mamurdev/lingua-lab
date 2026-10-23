@@ -937,15 +937,45 @@ STRICT REQUIREMENTS:
 
 // Feature 2: 1-Click Vocabulary Lookup
 app.post("/api/vocabulary/lookup", async (req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+
+  if (!supabaseAdmin) {
+    return res.status(503).json({ error: "Service temporarily unavailable" });
+  }
+
   try {
-    const { word, context, language = "English" } = req.body;
+    const token = req.headers.authorization?.replace("Bearer ", "");
+    if (!token) {
+      return res.status(401).json({ error: "Authentication required" });
+    }
+    const { data: { user }, error: authError } = await supabaseAdmin.auth.getUser(token);
+    if (authError || !user) {
+      return res.status(401).json({ error: "Invalid or expired token" });
+    }
+
+    const { word, context, language = "English" } = req.body || {};
     if (!word || typeof word !== "string" || !word.trim()) {
       return res.status(400).json({ error: "Missing word for vocabulary lookup" });
     }
 
     const cleanWord = word.trim().replace(/[.,!?;:"'()[\]{}«»¡¿]/g, "");
-    if (!cleanWord) {
+    if (!cleanWord || cleanWord.length > 100) {
       return res.status(400).json({ error: "Invalid word" });
+    }
+
+    if (context && (typeof context !== "string" || context.length > 500)) {
+      return res.status(400).json({ error: "Context exceeds maximum length of 500 characters" });
+    }
+
+    // Quota check
+    let quota;
+    try {
+      quota = await enforceQuota(user.id, "ai", 60, 6);
+    } catch {
+      return res.status(503).json({ error: "Service temporarily unavailable" });
+    }
+    if (!quota.allowed) {
+      return res.status(429).json({ error: quota.reason });
     }
 
     const prompt = `You are an expert polyglot language tutor.
@@ -980,7 +1010,8 @@ Return ONLY a JSON object with these exact keys:
     }
 
     if (!result) {
-      throw lastError || new Error("Failed to lookup vocabulary with AI models");
+      console.error("[Vocab] AI generation error:", lastError);
+      return res.status(502).json({ error: "Failed to lookup vocabulary with AI models" });
     }
 
     const textOutput = result.response.text();
@@ -988,7 +1019,7 @@ Return ONLY a JSON object with these exact keys:
     try {
       data = JSON.parse(textOutput);
     } catch {
-      return res.status(502).json({ error: "Malformed JSON response from AI" });
+      return res.status(502).json({ error: "Malformed response from language service" });
     }
 
     res.json({
@@ -1002,39 +1033,100 @@ Return ONLY a JSON object with these exact keys:
     });
   } catch (error) {
     console.error("[Vocab] Error in /api/vocabulary/lookup:", error);
-    res.status(500).json({ error: error instanceof Error ? error.message : "Failed to lookup vocabulary" });
+    res.status(500).json({ error: "Failed to lookup vocabulary" });
   }
 });
 
 // Feature 1: Standalone Grammar Analysis endpoint
 app.post("/api/grammar/analyze", async (req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+
+  if (!supabaseAdmin) {
+    return res.status(503).json({ error: "Service temporarily unavailable" });
+  }
+
   try {
-    const { message, language = "English", level = "Beginner" } = req.body;
+    const token = req.headers.authorization?.replace("Bearer ", "");
+    if (!token) {
+      return res.status(401).json({ error: "Authentication required" });
+    }
+    const { data: { user }, error: authError } = await supabaseAdmin.auth.getUser(token);
+    if (authError || !user) {
+      return res.status(401).json({ error: "Invalid or expired token" });
+    }
+
+    const { message, language = "English", level = "Beginner" } = req.body || {};
     if (!message || typeof message !== "string" || !message.trim()) {
       return res.status(400).json({ error: "Missing message text for grammar analysis" });
+    }
+    if (message.length > 2000) {
+      return res.status(400).json({ error: "Message exceeds maximum length of 2,000 characters" });
+    }
+
+    // Quota check
+    let quota;
+    try {
+      quota = await enforceQuota(user.id, "ai", 60, 6);
+    } catch {
+      return res.status(503).json({ error: "Service temporarily unavailable" });
+    }
+    if (!quota.allowed) {
+      return res.status(429).json({ error: quota.reason });
     }
 
     const feedback = await analyzeGrammar(genAI, message.trim(), language, level);
     res.json({ feedback });
   } catch (error) {
     console.error("[Grammar] Error in /api/grammar/analyze:", error);
-    res.status(500).json({ error: error instanceof Error ? error.message : "Failed to analyze grammar" });
+    res.status(500).json({ error: "Failed to analyze grammar" });
   }
 });
 
 // Feature 3: Standalone Scenario Objective Evaluation endpoint
 app.post("/api/scenario/evaluate", async (req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+
+  if (!supabaseAdmin) {
+    return res.status(503).json({ error: "Service temporarily unavailable" });
+  }
+
   try {
-    const { scenario, userMessage, assistantReply, language = "English" } = req.body;
+    const token = req.headers.authorization?.replace("Bearer ", "");
+    if (!token) {
+      return res.status(401).json({ error: "Authentication required" });
+    }
+    const { data: { user }, error: authError } = await supabaseAdmin.auth.getUser(token);
+    if (authError || !user) {
+      return res.status(401).json({ error: "Invalid or expired token" });
+    }
+
+    const { scenario, userMessage, assistantReply, language = "English" } = req.body || {};
     if (!scenario || !userMessage) {
       return res.status(400).json({ error: "Missing scenario or userMessage for evaluation" });
+    }
+    if (!isValidScenario(scenario)) {
+      return res.status(400).json({ error: "Invalid scenario payload" });
+    }
+    if (typeof userMessage !== "string" || userMessage.length > 2000) {
+      return res.status(400).json({ error: "Invalid user message" });
+    }
+
+    // Quota check
+    let quota;
+    try {
+      quota = await enforceQuota(user.id, "ai", 60, 6);
+    } catch {
+      return res.status(503).json({ error: "Service temporarily unavailable" });
+    }
+    if (!quota.allowed) {
+      return res.status(429).json({ error: quota.reason });
     }
 
     const evaluation = await evaluateScenarioObjectives(genAI, scenario, userMessage, assistantReply || "", language);
     res.json({ evaluation });
   } catch (error) {
     console.error("[Scenario] Error in /api/scenario/evaluate:", error);
-    res.status(500).json({ error: error instanceof Error ? error.message : "Failed to evaluate scenario" });
+    res.status(500).json({ error: "Failed to evaluate scenario" });
   }
 });
 

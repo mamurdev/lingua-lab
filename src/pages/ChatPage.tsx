@@ -309,9 +309,15 @@ export default function ChatPage() {
     if (analyzingGrammarId) return;
     setAnalyzingGrammarId(msg.id);
     try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const token = session?.access_token;
+
       const response = await fetch('/api/grammar/analyze', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
         body: JSON.stringify({
           message: msg.content,
           language: convDetails?.language || 'English',
@@ -473,9 +479,6 @@ export default function ChatPage() {
         },
         body: JSON.stringify({
           message: newMessage,
-          language: convDetails?.language || 'English',
-          level: convDetails?.level || 'Beginner',
-          conversationHistory: messages,
           conversationId: id,
           stream: true,
           scenario: scenario || undefined,

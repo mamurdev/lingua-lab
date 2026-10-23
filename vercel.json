@@ -3,6 +3,18 @@
   "outputDirectory": "dist",
   "rewrites": [
     {
+      "source": "/api/vocabulary/lookup",
+      "destination": "/api/vocabulary"
+    },
+    {
+      "source": "/api/grammar/analyze",
+      "destination": "/api/grammar"
+    },
+    {
+      "source": "/api/scenario/evaluate",
+      "destination": "/api/scenario"
+    },
+    {
       "source": "/api/(.*)",
       "destination": "/api/$1"
     },
