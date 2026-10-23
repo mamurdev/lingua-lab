@@ -80,9 +80,9 @@ export default function MissionChecklistCard({
         <div className="p-4 sm:p-5 space-y-3.5">
           {/* Mission Objective Checklist */}
           <div className="space-y-2">
-            <div className="flex items-center justify-between text-xs font-semibold text-slate-600 dark:text-slate-400 mb-1">
+            <div className="flex items-center justify-between gap-2 text-xs font-semibold text-slate-600 dark:text-slate-400 mb-1">
               <span>Mission Checklist</span>
-              <span className="text-[11px] font-normal text-slate-400 dark:text-slate-500">
+              <span className="text-[10px] font-normal text-slate-400 dark:text-slate-500 hidden sm:inline">
                 AI automatically validates objectives as you speak
               </span>
             </div>

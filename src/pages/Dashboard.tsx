@@ -234,13 +234,13 @@ export default function Dashboard({ session }: DashboardProps) {
           <div className="flex items-center gap-2 sm:gap-3">
             <ThemeToggle />
 
-            <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-slate-100 dark:bg-white/[0.06] border border-slate-200/80 dark:border-white/[0.08] text-xs text-slate-600 dark:text-slate-300 font-medium">
-              <span className="w-2 h-2 rounded-full bg-emerald-500 shadow-xs shadow-emerald-500/50"></span>
-              <span className="truncate max-w-[160px] sm:max-w-none">{session.user.email}</span>
+            <div className="flex items-center gap-1.5 sm:gap-2 px-2.5 sm:px-3 py-1.5 rounded-xl bg-slate-100 dark:bg-white/[0.06] border border-slate-200/80 dark:border-white/[0.08] text-xs text-slate-600 dark:text-slate-300 font-medium">
+              <span className="w-2 h-2 rounded-full bg-emerald-500 shadow-xs shadow-emerald-500/50 shrink-0"></span>
+              <span className="truncate max-w-[120px] xs:max-w-[160px] sm:max-w-none">{session.user.email}</span>
             </div>
             <button
               onClick={() => supabase.auth.signOut()}
-              className="px-3 py-1.5 rounded-xl text-xs font-semibold text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-white/[0.08] border border-transparent hover:border-slate-200 dark:hover:border-white/[0.08] transition-all"
+              className="px-2.5 sm:px-3 py-1.5 rounded-xl text-xs font-semibold text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-white/[0.08] border border-transparent hover:border-slate-200 dark:hover:border-white/[0.08] transition-all shrink-0"
             >
               Sign Out
             </button>
@@ -249,9 +249,9 @@ export default function Dashboard({ session }: DashboardProps) {
       </header>
 
       {/* Main Container */}
-      <main className="max-w-4xl mx-auto px-4 sm:px-6 py-8 sm:py-10 space-y-8">
+      <main className="max-w-4xl mx-auto px-3.5 sm:px-6 py-6 sm:py-10 space-y-6 sm:space-y-8 min-w-0">
         {/* Practice Dialogue & Missions Launcher Card */}
-        <section className="bg-white dark:bg-[#0d121f] border border-slate-200/90 dark:border-white/[0.08] rounded-2xl p-6 sm:p-7 shadow-sm dark:shadow-[inset_0_1px_0_0_rgba(255,255,255,0.05)] space-y-6 transition-colors duration-200">
+        <section className="bg-white dark:bg-[#0d121f] border border-slate-200/90 dark:border-white/[0.08] rounded-2xl p-4 sm:p-7 shadow-sm dark:shadow-[inset_0_1px_0_0_rgba(255,255,255,0.05)] space-y-5 sm:space-y-6 transition-colors duration-200">
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 pb-2 border-b border-slate-100 dark:border-white/[0.06]">
             <div>
               <h2 className="text-base font-bold text-slate-900 dark:text-white tracking-tight flex items-center gap-2">
@@ -504,21 +504,21 @@ export default function Dashboard({ session }: DashboardProps) {
                 return (
                   <div
                     key={conv.id}
-                    className="bg-white dark:bg-[#0f1628] hover:bg-slate-50/80 dark:hover:bg-[#131b31] border border-slate-200/90 dark:border-white/[0.08] hover:border-slate-300 dark:hover:border-white/[0.16] p-4 rounded-xl flex justify-between items-center transition-all shadow-xs group"
+                    className="bg-white dark:bg-[#0f1628] hover:bg-slate-50/80 dark:hover:bg-[#131b31] border border-slate-200/90 dark:border-white/[0.08] hover:border-slate-300 dark:hover:border-white/[0.16] p-3.5 sm:p-4 rounded-xl flex justify-between items-center transition-all shadow-xs group min-w-0"
                   >
-                    <Link to={`/chat/${conv.id}`} className="flex-1 min-w-0 mr-4 block">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <span className="text-base">{getLanguageFlag(conv.language)}</span>
-                        <h4 className="font-semibold text-sm text-slate-900 dark:text-slate-100 group-hover:text-blue-600 dark:group-hover:text-blue-400 transition-colors truncate">
+                    <Link to={`/chat/${conv.id}`} className="flex-1 min-w-0 mr-2.5 sm:mr-4 block">
+                      <div className="flex items-center gap-1.5 sm:gap-2 flex-wrap">
+                        <span className="text-base shrink-0">{getLanguageFlag(conv.language)}</span>
+                        <h4 className="font-semibold text-xs sm:text-sm text-slate-900 dark:text-slate-100 group-hover:text-blue-600 dark:group-hover:text-blue-400 transition-colors truncate">
                           {conv.title}
                         </h4>
-                        <span className="text-[10px] font-mono px-2 py-0.5 rounded-md bg-slate-100 dark:bg-white/[0.06] border border-slate-200/80 dark:border-white/[0.08] text-slate-600 dark:text-slate-300 font-medium">
+                        <span className="text-[10px] font-mono px-2 py-0.5 rounded-md bg-slate-100 dark:bg-white/[0.06] border border-slate-200/80 dark:border-white/[0.08] text-slate-600 dark:text-slate-300 font-medium shrink-0">
                           {conv.level}
                         </span>
 
                         {storedScenario && (
                           <span
-                            className={`text-[10px] font-mono px-2 py-0.5 rounded-md font-semibold border ${
+                            className={`text-[10px] font-mono px-2 py-0.5 rounded-md font-semibold border shrink-0 ${
                               isAllDone
                                 ? 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border-emerald-200/80 dark:border-emerald-800/60'
                                 : 'bg-blue-50/90 dark:bg-blue-600/15 text-blue-700 dark:text-blue-300 border-blue-200/80 dark:border-blue-500/30'
@@ -539,12 +539,13 @@ export default function Dashboard({ session }: DashboardProps) {
                       )}
                     </Link>
 
-                    <div className="flex items-center gap-2 shrink-0">
+                    <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
                       <Link
                         to={`/chat/${conv.id}`}
-                        className="px-3.5 py-1.5 bg-slate-900 dark:bg-blue-600 hover:bg-blue-600 dark:hover:bg-blue-500 text-white rounded-lg text-xs font-semibold transition-all shadow-xs"
+                        className="px-2.5 sm:px-3.5 py-1.5 bg-slate-900 dark:bg-blue-600 hover:bg-blue-600 dark:hover:bg-blue-500 text-white rounded-lg text-xs font-semibold transition-all shadow-xs"
                       >
-                        Open Chat →
+                        <span className="inline sm:hidden">Chat →</span>
+                        <span className="hidden sm:inline">Open Chat →</span>
                       </Link>
 
                       <button

@@ -131,7 +131,15 @@ export default function ChatPage() {
   const [streamingMessageId, setStreamingMessageId] = useState<string | null>(null);
   const recognitionRef = useRef<ISpeechRecognition | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+
+  // Auto-resize input textarea as user types more content
+  useEffect(() => {
+    if (inputRef.current) {
+      inputRef.current.style.height = 'auto';
+      inputRef.current.style.height = `${Math.min(inputRef.current.scrollHeight, 180)}px`;
+    }
+  }, [input]);
 
   // Quiz state (Milestone 4)
   const [exercises, setExercises] = useState<Exercise[]>([]);
@@ -425,8 +433,8 @@ export default function ChatPage() {
     };
   }, [id]);
 
-  const sendMessage = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const sendMessage = async (e?: React.FormEvent) => {
+    e?.preventDefault();
     if (!input.trim() || !id || loading) return;
 
     if (isListening) {
@@ -831,110 +839,135 @@ export default function ChatPage() {
 
       {/* Feature 3: Mission completion toast */}
       {missionToast && (
-        <div className="fixed top-16 right-4 sm:right-6 z-50 bg-slate-900/95 dark:bg-[#131b2e] text-white text-xs font-semibold px-4 py-2.5 rounded-xl shadow-lg border border-slate-700/80 dark:border-white/[0.1] flex items-center gap-2 animate-bounce">
-          <span className="w-2 h-2 rounded-full bg-emerald-400 shadow-xs shadow-emerald-400/50" />
-          <span>{missionToast}</span>
+        <div className="fixed top-14 sm:top-16 right-3 sm:right-6 left-3 sm:left-auto max-w-sm z-50 bg-slate-900/95 dark:bg-[#131b2e] text-white text-xs font-semibold px-3.5 py-2.5 rounded-xl shadow-lg border border-slate-700/80 dark:border-white/[0.1] flex items-center gap-2 animate-bounce">
+          <span className="w-2 h-2 rounded-full bg-emerald-400 shadow-xs shadow-emerald-400/50 shrink-0" />
+          <span className="truncate">{missionToast}</span>
         </div>
       )}
 
       {/* Top Header */}
-      <header className="px-4 sm:px-6 py-2.5 bg-white/80 dark:bg-[#07090e]/80 backdrop-blur-xl border-b border-slate-200/80 dark:border-white/[0.08] flex flex-wrap justify-between items-center gap-3 shrink-0 z-20 transition-colors duration-200">
-        <div className="flex items-center gap-2.5 sm:gap-3.5 shrink-0 whitespace-nowrap">
-          <Link
-            to="/"
-            className="px-3 py-1.5 rounded-xl bg-slate-100 dark:bg-white/[0.06] hover:bg-slate-200/80 dark:hover:bg-white/[0.1] border border-slate-200/80 dark:border-white/[0.08] text-xs font-semibold text-slate-700 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-all flex items-center gap-1.5 shadow-xs shrink-0 whitespace-nowrap"
-          >
-            <span>←</span>
-            <span>Dashboard</span>
-          </Link>
-          <div className="flex items-center gap-2 sm:gap-2.5 whitespace-nowrap shrink-0">
-            <span className="text-lg leading-none shrink-0" aria-hidden="true">
-              {getLanguageFlag(convDetails?.language)}
-            </span>
-            <h1 className="text-sm font-bold tracking-tight text-slate-900 dark:text-white shrink-0">
-              {convDetails?.language || 'Language'} Dialogue
-            </h1>
-            <span className="text-[10px] font-mono uppercase tracking-wider px-2 py-0.5 rounded-md bg-slate-100 dark:bg-white/[0.06] border border-slate-200/80 dark:border-white/[0.08] text-slate-600 dark:text-slate-300 font-medium shrink-0">
-              {convDetails?.level || 'Beginner'}
-            </span>
-            <span className="text-slate-300 dark:text-slate-600 select-none text-xs shrink-0">•</span>
-            <span className="text-[11px] text-slate-400 dark:text-slate-500 font-mono shrink-0">
-              {messages.length} {messages.length === 1 ? 'message' : 'messages'}
-            </span>
-            <button
-              type="button"
-              onClick={() => setShowSessionInfo(true)}
-              title="View Session Memory & Quota Architecture (Milestone 5.3)"
-              className="px-2 py-0.5 rounded-md bg-indigo-50 dark:bg-indigo-500/10 hover:bg-indigo-100 dark:hover:bg-indigo-500/20 text-indigo-700 dark:text-indigo-300 border border-indigo-200/80 dark:border-indigo-500/25 text-[11px] font-medium transition-colors inline-flex items-center gap-1 shrink-0 whitespace-nowrap focus-visible:ring-2 focus-visible:ring-indigo-500"
-              aria-label="View session memory and architecture details"
-            >
-              <span className="leading-none">ℹ️</span>
-              <span className="leading-none">Session Info</span>
-            </button>
-          </div>
-        </div>
+      <header className="px-3 sm:px-6 py-2 sm:py-2.5 bg-white/80 dark:bg-[#07090e]/80 backdrop-blur-xl border-b border-slate-200/80 dark:border-white/[0.08] shrink-0 z-20 transition-colors duration-200">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 sm:gap-4 max-w-7xl mx-auto">
+          {/* Top Row on Mobile, Left Side on Desktop */}
+          <div className="flex items-center justify-between gap-2 min-w-0">
+            <div className="flex items-center gap-2 min-w-0">
+              <Link
+                to="/"
+                className="px-2.5 py-1.5 rounded-xl bg-slate-100 dark:bg-white/[0.06] hover:bg-slate-200/80 dark:hover:bg-white/[0.1] border border-slate-200/80 dark:border-white/[0.08] text-xs font-semibold text-slate-700 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-all flex items-center gap-1 shadow-xs shrink-0"
+              >
+                <span>←</span>
+                <span className="hidden xs:inline">Dashboard</span>
+              </Link>
+              <div className="flex items-center gap-1.5 min-w-0">
+                <span className="text-base sm:text-lg leading-none shrink-0" aria-hidden="true">
+                  {getLanguageFlag(convDetails?.language)}
+                </span>
+                <h1 className="text-xs sm:text-sm font-bold tracking-tight text-slate-900 dark:text-white truncate">
+                  {convDetails?.language || 'Language'}
+                  <span className="hidden sm:inline"> Dialogue</span>
+                </h1>
+                <span className="text-[10px] font-mono uppercase tracking-wider px-1.5 py-0.5 rounded-md bg-slate-100 dark:bg-white/[0.06] border border-slate-200/80 dark:border-white/[0.08] text-slate-600 dark:text-slate-300 font-medium shrink-0">
+                  {convDetails?.level || 'Beginner'}
+                </span>
+                <span className="text-slate-300 dark:text-slate-600 select-none text-xs shrink-0 hidden md:inline">•</span>
+                <span className="text-[11px] text-slate-400 dark:text-slate-500 font-mono shrink-0 hidden md:inline">
+                  {messages.length} {messages.length === 1 ? 'msg' : 'msgs'}
+                </span>
+              </div>
+            </div>
 
-        {/* View Switcher, Theme Toggle & Quiz Action */}
-        <div className="flex items-center gap-2 sm:gap-2.5 shrink-0 flex-wrap sm:flex-nowrap">
-          <ThemeToggle />
-
-          <div className="bg-slate-100 dark:bg-white/[0.05] p-1 rounded-xl border border-slate-200/80 dark:border-white/[0.08] flex items-center gap-1 text-xs">
-            <button
-              onClick={() => setActiveTab('chat')}
-              className={`px-3 py-1.5 rounded-lg transition-all ${
-                activeTab === 'chat'
-                  ? 'bg-white dark:bg-[#162036] text-slate-900 dark:text-white shadow-xs border border-transparent dark:border-white/[0.1] font-semibold'
-                  : 'text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200'
-              }`}
-            >
-              💬 Dialogue
-            </button>
-            <button
-              onClick={() => setActiveTab('quiz')}
-              className={`px-3 py-1.5 rounded-lg transition-all ${
-                activeTab === 'quiz'
-                  ? 'bg-white dark:bg-[#162036] text-slate-900 dark:text-white shadow-xs border border-transparent dark:border-white/[0.1] font-semibold'
-                  : 'text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200'
-              }`}
-            >
-              📝 Review Quiz {exercises.length > 0 && `(${exercises.length})`}
-            </button>
-            <button
-              onClick={() => setActiveTab('vocab')}
-              className={`px-3 py-1.5 rounded-lg transition-all ${
-                activeTab === 'vocab'
-                  ? 'bg-white dark:bg-[#162036] text-slate-900 dark:text-white shadow-xs border border-transparent dark:border-white/[0.1] font-semibold'
-                  : 'text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200'
-              }`}
-            >
-              🗂️ Vocab Deck {vocabulary.length > 0 && `(${vocabulary.length})`}
-            </button>
+            {/* Mobile Actions: Session Info & Theme Toggle */}
+            <div className="flex items-center gap-1.5 shrink-0 sm:hidden">
+              <button
+                type="button"
+                onClick={() => setShowSessionInfo(true)}
+                title="View Session Memory & Quota Architecture"
+                className="p-1.5 rounded-lg bg-indigo-50 dark:bg-indigo-500/10 text-indigo-700 dark:text-indigo-300 border border-indigo-200/80 dark:border-indigo-500/25 text-xs font-medium"
+                aria-label="View session info"
+              >
+                <span>ℹ️</span>
+              </button>
+              <ThemeToggle />
+            </div>
           </div>
 
-          <button
-            onClick={handleGenerateQuiz}
-            disabled={generatingQuiz || messages.length < 4}
-            title={messages.length < 4 ? "Requires at least 2 complete turns (4 messages)" : "Generate review quiz from chat"}
-            className="px-3.5 py-1.5 bg-violet-50/90 dark:bg-violet-600/15 hover:bg-violet-100 dark:hover:bg-violet-600/25 text-violet-700 dark:text-violet-300 border border-violet-200/80 dark:border-violet-500/30 disabled:opacity-40 rounded-xl text-xs font-semibold transition-all flex items-center gap-1.5 shadow-xs"
-          >
-            {generatingQuiz ? (
-              <>
-                <span className="w-3 h-3 border-2 border-violet-400/40 border-t-violet-600 rounded-full animate-spin" />
-                <span>Generating...</span>
-              </>
-            ) : (
-              <>
-                <span>✨ Generate Quiz</span>
-              </>
-            )}
-          </button>
+          {/* Bottom Row on Mobile, Right Side on Desktop */}
+          <div className="flex items-center gap-1.5 sm:gap-2.5 w-full sm:w-auto min-w-0">
+            <div className="bg-slate-100 dark:bg-white/[0.05] p-0.5 sm:p-1 rounded-xl border border-slate-200/80 dark:border-white/[0.08] flex items-center gap-0.5 sm:gap-1 text-xs flex-1 sm:flex-initial">
+              <button
+                onClick={() => setActiveTab('chat')}
+                className={`flex-1 sm:flex-initial text-center px-2 sm:px-3 py-1.5 rounded-lg transition-all text-xs ${
+                  activeTab === 'chat'
+                    ? 'bg-white dark:bg-[#162036] text-slate-900 dark:text-white shadow-xs border border-transparent dark:border-white/[0.1] font-semibold'
+                    : 'text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200'
+                }`}
+              >
+                💬 <span className="inline sm:hidden">Chat</span><span className="hidden sm:inline">Dialogue</span>
+              </button>
+              <button
+                onClick={() => setActiveTab('quiz')}
+                className={`flex-1 sm:flex-initial text-center px-1.5 sm:px-3 py-1.5 rounded-lg transition-all text-xs truncate ${
+                  activeTab === 'quiz'
+                    ? 'bg-white dark:bg-[#162036] text-slate-900 dark:text-white shadow-xs border border-transparent dark:border-white/[0.1] font-semibold'
+                    : 'text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200'
+                }`}
+              >
+                📝 <span className="inline sm:hidden">Quiz</span><span className="hidden sm:inline">Review Quiz</span>{exercises.length > 0 && ` (${exercises.length})`}
+              </button>
+              <button
+                onClick={() => setActiveTab('vocab')}
+                className={`flex-1 sm:flex-initial text-center px-1.5 sm:px-3 py-1.5 rounded-lg transition-all text-xs truncate ${
+                  activeTab === 'vocab'
+                    ? 'bg-white dark:bg-[#162036] text-slate-900 dark:text-white shadow-xs border border-transparent dark:border-white/[0.1] font-semibold'
+                    : 'text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200'
+                }`}
+              >
+                🗂️ <span className="inline sm:hidden">Deck</span><span className="hidden sm:inline">Vocab Deck</span>{vocabulary.length > 0 && ` (${vocabulary.length})`}
+              </button>
+            </div>
+
+            <button
+              onClick={handleGenerateQuiz}
+              disabled={generatingQuiz || messages.length < 4}
+              title={messages.length < 4 ? "Requires at least 2 complete turns (4 messages)" : "Generate review quiz from chat"}
+              className="px-2.5 sm:px-3.5 py-1.5 bg-violet-50/90 dark:bg-violet-600/15 hover:bg-violet-100 dark:hover:bg-violet-600/25 text-violet-700 dark:text-violet-300 border border-violet-200/80 dark:border-violet-500/30 disabled:opacity-40 rounded-xl text-xs font-semibold transition-all flex items-center gap-1 shadow-xs shrink-0"
+            >
+              {generatingQuiz ? (
+                <>
+                  <span className="w-3 h-3 border-2 border-violet-400/40 border-t-violet-600 rounded-full animate-spin" />
+                  <span className="hidden sm:inline">Generating...</span>
+                </>
+              ) : (
+                <>
+                  <span>✨</span>
+                  <span className="hidden sm:inline">Generate Quiz</span>
+                  <span className="inline sm:hidden text-[11px]">Quiz</span>
+                </>
+              )}
+            </button>
+
+            {/* Desktop Session Info & Theme Toggle */}
+            <div className="hidden sm:flex items-center gap-2 shrink-0">
+              <button
+                type="button"
+                onClick={() => setShowSessionInfo(true)}
+                title="View Session Memory & Quota Architecture (Milestone 5.3)"
+                className="px-2 py-1 rounded-md bg-indigo-50 dark:bg-indigo-500/10 hover:bg-indigo-100 dark:hover:bg-indigo-500/20 text-indigo-700 dark:text-indigo-300 border border-indigo-200/80 dark:border-indigo-500/25 text-[11px] font-medium transition-colors inline-flex items-center gap-1 shrink-0 whitespace-nowrap focus-visible:ring-2 focus-visible:ring-indigo-500"
+                aria-label="View session memory and architecture details"
+              >
+                <span className="leading-none">ℹ️</span>
+                <span className="leading-none">Session Info</span>
+              </button>
+              <ThemeToggle />
+            </div>
+          </div>
         </div>
       </header>
 
       {/* Main Area: Chat or Quiz */}
       {activeTab === 'chat' ? (
         <>
-          <main className="flex-1 p-4 sm:p-6 overflow-y-auto space-y-4 max-w-3xl w-full mx-auto">
+          <main className="flex-1 p-3 sm:p-6 overflow-y-auto space-y-3.5 max-w-3xl w-full mx-auto min-w-0">
             {/* Feature 3: Immersion Scenario Checklist */}
             {scenario && (
               <MissionChecklistCard
@@ -993,8 +1026,8 @@ export default function ChatPage() {
               messages.map((msg) => (
                 <div key={msg.id} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
                   {msg.role === 'user' ? (
-                    <div className="flex flex-col items-end max-w-[85%] sm:max-w-[78%] space-y-1">
-                      <div className="p-4 sm:p-4.5 rounded-2xl text-sm leading-relaxed shadow-sm bg-gradient-to-r from-blue-600 to-indigo-600 text-white rounded-br-sm shadow-blue-500/20">
+                    <div className="flex flex-col items-end max-w-[90%] sm:max-w-[78%] space-y-1">
+                      <div className="p-3.5 sm:p-4.5 rounded-2xl text-sm leading-relaxed shadow-sm bg-gradient-to-r from-blue-600 to-indigo-600 text-white rounded-br-sm shadow-blue-500/20 break-words">
                         {msg.content}
                       </div>
 
@@ -1022,7 +1055,7 @@ export default function ChatPage() {
                       )}
                     </div>
                   ) : (
-                    <div className="max-w-[85%] sm:max-w-[78%] p-4 sm:p-5 rounded-2xl text-sm leading-relaxed shadow-sm dark:shadow-[inset_0_1px_0_0_rgba(255,255,255,0.05)] bg-white dark:bg-[#0d121f] border border-slate-200/90 dark:border-white/[0.08] text-slate-800 dark:text-slate-200 rounded-bl-sm space-y-2.5 transition-colors duration-200">
+                    <div className="max-w-[90%] sm:max-w-[78%] p-3.5 sm:p-5 rounded-2xl text-sm leading-relaxed shadow-sm dark:shadow-[inset_0_1px_0_0_rgba(255,255,255,0.05)] bg-white dark:bg-[#0d121f] border border-slate-200/90 dark:border-white/[0.08] text-slate-800 dark:text-slate-200 rounded-bl-sm space-y-2.5 transition-colors duration-200 break-words">
                       <div className="flex items-center justify-between gap-2 text-[10px] font-mono uppercase tracking-wider text-slate-400 dark:text-slate-500">
                         <div className="flex items-center gap-1.5">
                           <span className="w-1.5 h-1.5 rounded-full bg-blue-500 shadow-xs shadow-blue-500/50"></span>
@@ -1188,7 +1221,7 @@ export default function ChatPage() {
               )}
 
               {/* Input Dock */}
-              <form onSubmit={sendMessage} className="bg-white dark:bg-[#0d121f] border border-slate-200/90 dark:border-white/[0.09] rounded-2xl p-1.5 flex items-center gap-2 shadow-sm dark:shadow-2xl focus-within:border-blue-500 dark:focus-within:border-blue-400 focus-within:ring-2 focus-within:ring-blue-100 dark:focus-within:ring-blue-500/20 transition-all">
+              <form onSubmit={sendMessage} className="bg-white dark:bg-[#0d121f] border border-slate-200/90 dark:border-white/[0.09] rounded-2xl p-1.5 flex items-end gap-2 shadow-sm dark:shadow-2xl focus-within:border-blue-500 dark:focus-within:border-blue-400 focus-within:ring-2 focus-within:ring-blue-100 dark:focus-within:ring-blue-500/20 transition-all">
                 {/* Microphone Toggle Button */}
                 <button
                   type="button"
@@ -1214,36 +1247,35 @@ export default function ChatPage() {
                   )}
                 </button>
 
-                <div className="relative flex-1">
-                  <input
+                <div className="relative flex-1 min-w-0">
+                  <textarea
                     ref={inputRef}
-                    type="text"
+                    rows={1}
                     value={input}
                     onChange={(e) => setInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && !e.shiftKey) {
+                        if ((e.nativeEvent as unknown as { isComposing?: boolean }).isComposing) return;
+                        e.preventDefault();
+                        if (!loading && input.trim()) {
+                          sendMessage();
+                        }
+                      }
+                    }}
                     placeholder={
                       isListening
                         ? `Listening in ${convDetails?.language || 'target language'}... speak now`
                         : "Type or click 🎙️ to speak..."
                     }
                     disabled={loading}
-                    className="w-full bg-transparent px-2.5 py-2 text-sm sm:text-base text-slate-900 dark:text-white placeholder:text-slate-400 dark:placeholder:text-slate-500 focus:outline-none"
+                    className="w-full bg-transparent px-2.5 py-2 text-sm sm:text-base text-slate-900 dark:text-white placeholder:text-slate-400 dark:placeholder:text-slate-500 focus:outline-none resize-none overflow-y-auto max-h-[180px] leading-relaxed block"
                   />
-                  {input.length > 0 && !loading && (
-                    <button
-                      type="button"
-                      onClick={() => setInput('')}
-                      className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 dark:text-slate-500 hover:text-slate-600 dark:hover:text-slate-300 text-xs px-1"
-                      title="Clear draft"
-                    >
-                      ✕
-                    </button>
-                  )}
                 </div>
 
                 <button
                   type="submit"
                   disabled={loading || !input.trim()}
-                  className="px-4 py-2 bg-blue-600 hover:bg-blue-500 active:scale-[0.98] disabled:opacity-40 rounded-xl text-xs sm:text-sm font-semibold text-white transition-all shadow-sm shadow-blue-500/25 flex items-center gap-1.5 shrink-0"
+                  className="h-10 px-4 bg-blue-600 hover:bg-blue-500 active:scale-[0.98] disabled:opacity-40 rounded-xl text-xs sm:text-sm font-semibold text-white transition-all shadow-sm shadow-blue-500/25 flex items-center gap-1.5 shrink-0"
                 >
                   {loading ? (
                     <>
@@ -1266,8 +1298,8 @@ export default function ChatPage() {
         </>
       ) : activeTab === 'quiz' ? (
         /* Milestone 4: Interactive Quiz View */
-        <main className="flex-1 p-4 sm:p-6 overflow-y-auto max-w-3xl w-full mx-auto space-y-6">
-          <div className="flex justify-between items-center pb-4 border-b border-slate-200/80 dark:border-white/[0.08]">
+        <main className="flex-1 p-3 sm:p-6 overflow-y-auto max-w-3xl w-full mx-auto space-y-5 min-w-0">
+          <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-2 pb-4 border-b border-slate-200/80 dark:border-white/[0.08]">
             <div>
               <h2 className="text-base font-bold tracking-tight text-slate-900 dark:text-white">Review Quiz</h2>
               <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
@@ -1275,7 +1307,7 @@ export default function ChatPage() {
               </p>
             </div>
             {messages.length < 4 && (
-              <span className="text-[11px] font-mono text-amber-800 dark:text-amber-300 bg-amber-50 dark:bg-amber-950/40 px-2.5 py-1 rounded-lg border border-amber-200 dark:border-amber-800 font-medium">
+              <span className="text-[11px] font-mono text-amber-800 dark:text-amber-300 bg-amber-50 dark:bg-amber-950/40 px-2.5 py-1 rounded-lg border border-amber-200 dark:border-amber-800 font-medium self-start sm:self-auto shrink-0">
                 ⚠️ Need at least 4 messages (2 turns)
               </span>
             )}
@@ -1348,7 +1380,7 @@ export default function ChatPage() {
                       </div>
 
                       {/* 4 Radio Options */}
-                      <div className="space-y-2 pl-9">
+                      <div className="space-y-2 pl-0 sm:pl-9">
                         {q.options.map((option, optIdx) => {
                           const isSelected = userChoice === optIdx;
                           const isTheCorrectAnswer = optIdx === q.answerIndex;
@@ -1395,7 +1427,7 @@ export default function ChatPage() {
 
                       {/* Explanation box after grading */}
                       {isGraded && (
-                        <div className="mt-3 p-3.5 bg-slate-50 dark:bg-white/[0.04] border border-slate-200/80 dark:border-white/[0.08] rounded-xl text-xs text-slate-600 dark:text-slate-300 ml-9 leading-relaxed">
+                        <div className="mt-3 p-3.5 bg-slate-50 dark:bg-white/[0.04] border border-slate-200/80 dark:border-white/[0.08] rounded-xl text-xs text-slate-600 dark:text-slate-300 ml-0 sm:ml-9 leading-relaxed">
                           <p className="font-semibold text-violet-700 dark:text-violet-400 mb-1">
                             {isCorrect ? '💡 Excellent!' : '💡 Explanation:'}
                           </p>

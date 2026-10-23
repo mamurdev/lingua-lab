@@ -143,9 +143,9 @@ export default function VocabularyDeckView({
   }, [vocabulary, currentLanguage]);
 
   return (
-    <div className="flex-1 p-4 sm:p-6 overflow-y-auto max-w-3xl w-full mx-auto space-y-6">
+    <div className="flex-1 p-3 sm:p-6 overflow-y-auto max-w-3xl w-full mx-auto space-y-5 min-w-0">
       {/* Header and Controls */}
-      <div className="flex flex-wrap justify-between items-center gap-4 pb-4 border-b border-slate-200 dark:border-slate-800">
+      <div className="flex flex-wrap justify-between items-center gap-3 sm:gap-4 pb-4 border-b border-slate-200 dark:border-slate-800">
         <div>
           <h2 className="text-base font-bold tracking-tight text-slate-900 dark:text-white flex items-center gap-2">
             <span>Vocabulary Deck</span>
@@ -158,12 +158,12 @@ export default function VocabularyDeckView({
           </p>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 w-full sm:w-auto justify-between sm:justify-end">
           {/* Sub-tab Switcher */}
           <div className="bg-slate-100 dark:bg-slate-800/80 p-1 rounded-xl border border-slate-200 dark:border-slate-700 flex items-center gap-1 text-xs">
             <button
               onClick={() => setActiveSubTab('flashcards')}
-              className={`px-3 py-1.5 rounded-lg transition-all ${
+              className={`px-2.5 sm:px-3 py-1.5 rounded-lg transition-all ${
                 activeSubTab === 'flashcards'
                   ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-sm font-semibold'
                   : 'text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200'
@@ -173,7 +173,7 @@ export default function VocabularyDeckView({
             </button>
             <button
               onClick={() => setActiveSubTab('list')}
-              className={`px-3 py-1.5 rounded-lg transition-all ${
+              className={`px-2.5 sm:px-3 py-1.5 rounded-lg transition-all ${
                 activeSubTab === 'list'
                   ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-sm font-semibold'
                   : 'text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200'
@@ -185,7 +185,7 @@ export default function VocabularyDeckView({
 
           <button
             onClick={() => setShowAddModal(true)}
-            className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-semibold shadow-xs flex items-center gap-1 transition-all"
+            className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-semibold shadow-xs flex items-center gap-1 transition-all shrink-0"
           >
             <span>+</span>
             <span>Add Word</span>
