@@ -1,6 +1,15 @@
 # LinguaLab 🌍🗣️
 
+> **Live Demo:** [https://your-demo-url.vercel.app](https://your-demo-url.vercel.app) *(Replace with live deployment link)*  
+> **Screenshots:** *(Add application screenshots / demo walkthroughs here)*
+
 LinguaLab is a modern, full-stack, AI-powered conversational language immersion platform built with **React 19**, **TypeScript**, **Vite**, **Tailwind CSS**, and **Supabase**, backed by **Google Gemini AI** and **ElevenLabs TTS**.
+
+---
+
+## 🏛️ Architecture
+
+LinguaLab separates client-side state and presentation from privileged backend operations. The frontend is a React 19 single-page application that uses Supabase Auth for session management and queries Supabase directly under Row-Level Security (RLS) for read access to a user's conversations and messages. All state-mutating and AI-generating operations—including conversational turns, grammar analysis, vocabulary lookups, review quizzes, and ElevenLabs speech synthesis—are routed through backend handlers (either the local Node.js/Express server or Vercel serverless functions in `api/`). The backend uses the privileged `service_role` key to execute PostgreSQL stored procedures (RPCs) that atomically enforce user rate limits, daily quotas, generation lease locks, and message persistence without granting direct insert or update permissions to client tokens.
 
 ---
 
@@ -12,8 +21,8 @@ LinguaLab is a modern, full-stack, AI-powered conversational language immersion 
 - **Interactive Review Quizzes:** On-demand, AI-generated multiple-choice comprehension and vocabulary quizzes generated directly from the recent conversation transcript.
 - **1-Click Vocabulary Lookup & Flashcards:** Highlight or enter any target word to get definitions, IPA phonetics, part of speech, and save directly to an interactive Spaced Repetition (SRS) vocabulary deck.
 - **Real-Time Grammar Analysis:** Inline grammatical inspection detailing errors, natural corrections, and concise pedagogical explanations.
-- **Enterprise-Grade Rate Limiting & Concurrency Controls:**
-  - Token-bucket rate limiting (6 requests/minute) and daily quota caps (60 AI turns/day, 30 voice plays/day) enforced atomically in PostgreSQL.
+- **Rate Limiting & Concurrency Controls:**
+  - Per-minute (6) and per-day request limits (60 AI turns/day, 30 voice plays/day) enforced atomically in PostgreSQL.
   - Per-conversation generation leases to guard against race conditions, duplicate submissions, and in-flight crosstalk.
   - 100-turn session cap per conversation.
 - **Modern Responsive UI:** Polished Dark and Light mode aesthetic built with Tailwind CSS.
@@ -26,7 +35,7 @@ LinguaLab is a modern, full-stack, AI-powered conversational language immersion 
 - **Database & Auth:** Supabase (PostgreSQL, Row Level Security, Atomic RPCs, Auth)
 - **AI Models:** Google Gemini (`gemini-3.5-flash`, `gemini-3.5-flash-lite`, `gemini-3.8-flash`)
 - **Text-to-Speech:** ElevenLabs API (`eleven_multilingual_v2`)
-- **Backend / Serverless:** Node.js Express server (`backend/`) and Vercel Serverless edge functions (`api/`)
+- **Backend / Serverless:** Node.js Express server (`backend/`) and Vercel serverless functions (`api/`)
 
 ---
 
@@ -43,9 +52,12 @@ LinguaLab is a modern, full-stack, AI-powered conversational language immersion 
 ### Environment Variables
 
 #### Frontend (`.env.local`)
+The frontend client in `src/lib/supabase.ts` inspects the following variables (checking `VITE_SUPABASE_PUBLISHABLE_KEY` first, with `VITE_SUPABASE_ANON_KEY` as fallback):
 ```bash
 VITE_SUPABASE_URL=https://<your-project-ref>.supabase.co
-VITE_SUPABASE_ANON_KEY=<your-anon-public-key>
+VITE_SUPABASE_PUBLISHABLE_KEY=<your-anon-or-publishable-key>
+# Alternative fallback accepted:
+# VITE_SUPABASE_ANON_KEY=<your-anon-or-publishable-key>
 ```
 
 #### Backend / Serverless (`backend/.env` and Vercel Environment Variables)
@@ -71,8 +83,9 @@ cd backend && npm install && cd ..
 ```
 
 ### 2. Apply Database Migrations
-Migrations are managed via the Supabase CLI in `supabase/migrations/`:
+Link to your Supabase project before applying migrations:
 ```bash
+npx supabase link --project-ref <your-project-ref>
 npx supabase db push
 ```
 
@@ -89,20 +102,55 @@ node index.js
 npm run dev
 ```
 
-### 4. Build & Lint Verification
+### 4. Build & Lint Commands
 ```bash
 # Typecheck and production bundle build
 npm run build
 
-# Linting verification
+# Linting check
 npm run lint
 ```
 
 ---
 
+## ☁️ Deploying to Vercel
+
+1. **Configure Environment Variables:**
+   Add both frontend and serverless environment variables in your Vercel Project Settings under **Settings > Environment Variables**:
+   - `VITE_SUPABASE_URL`
+   - `VITE_SUPABASE_PUBLISHABLE_KEY` (or `VITE_SUPABASE_ANON_KEY`)
+   - `SUPABASE_URL`
+   - `SUPABASE_SERVICE_ROLE_KEY`
+   - `GEMINI_API_KEY`
+   - `ELEVENLABS_API_KEY`
+   - `ELEVENLABS_VOICE_ID`
+
+2. **Configure Supabase Auth Redirect URLs:**
+   In your Supabase Dashboard under **Authentication > URL Configuration**:
+   - Set **Site URL** to your production Vercel domain (e.g., `https://lingua-lab.vercel.app`).
+   - Add wildcard preview URLs under **Redirect URLs** (e.g., `https://*-your-team.vercel.app/**` and `https://lingua-lab.vercel.app/**`) so authentication confirmations and session redirects resolve properly.
+
+3. **Database Schema Sync:**
+   Make sure your remote Supabase project is linked and up-to-date before deployment:
+   ```bash
+   npx supabase link --project-ref <your-project-ref>
+   npx supabase db push
+   ```
+
+---
+
+## ⚠️ Known Limitations
+
+- **Quota & Turn Limits:** Users are capped at 60 AI requests/day and 30 voice generation requests/day, with a per-minute burst rate limit of 6 requests/minute. Conversation sessions are limited to 100 turns.
+- **Audio Autoplay Restrictions:** Modern web browsers require explicit user interaction before playing audio. Automatic audio playback may be blocked until a user interacts with the page.
+- **Web Speech Fallback:** If ElevenLabs credentials or voice quotas are exhausted, speech synthesis relies on browser-native Web Speech API voices, whose availability and quality vary by operating system and browser.
+- **Serverless Cold Starts:** When running on Vercel serverless functions, initial requests to API routes may encounter slight latency from serverless cold starts.
+
+---
+
 ## 🔒 Security Architecture
 
-1. **Service-Role Isolation:** Sensitive database mutations, message insertions, quota increments, and generation lease acquisitions are locked down with `REVOKE ALL FROM PUBLIC, anon, authenticated` and can only be executed via backend `service_role` RPCs.
-2. **Row-Level Security (RLS):** Users can only read and manage their own conversations and messages.
-3. **No Secret Leaks:** Client production builds are verified to contain zero server-side API keys or service role secrets.
-4. **Cache & Error Sanitization:** All AI and speech generation responses explicitly declare `Cache-Control: no-store` and sanitize internal error traces before sending responses to the client.
+1. **Service-Role Isolation:** Sensitive database mutations, message insertions, quota increments, and generation lease acquisitions are restricted (`REVOKE ALL FROM PUBLIC, anon, authenticated`) and can only be executed via backend `service_role` RPCs.
+2. **Row-Level Security (RLS):** Authenticated users can only read their own conversations, messages, and saved exercises.
+3. **Client Secret Exclusion:** Server-side API keys (Gemini, ElevenLabs) and the Supabase service role secret are kept on the server and are not included in frontend environment variables or client code.
+4. **Cache-Control & Error Handling:** API routes declare `Cache-Control: no-store` headers and return generic error messages for server-side exceptions to avoid leaking internals to the client.
