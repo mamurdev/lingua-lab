@@ -1,7 +1,7 @@
 # LinguaLab 🌍🗣️
 
-> **Live Demo:** [https://your-demo-url.vercel.app](https://your-demo-url.vercel.app) *(Replace with live deployment link)*  
-> **Screenshots:** *(Add application screenshots / demo walkthroughs here)*
+> **Live Demo:** https://lingua-lab-chi.vercel.app/*  
+
 
 LinguaLab is a modern, full-stack, AI-powered conversational language immersion platform built with **React 19**, **TypeScript**, **Vite**, **Tailwind CSS**, and **Supabase**, backed by **Google Gemini AI** and **ElevenLabs TTS**.
 
